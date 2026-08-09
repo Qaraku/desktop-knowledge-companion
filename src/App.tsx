@@ -6,7 +6,9 @@ type Candidate = { id: string | number; content: string; state: "proposed" | "ed
 type Knowledge = { id: string | number; content: string; currentRevisionId: string };
 type KnowledgeListResponse = { result?: { value?: Array<{ knowledge: { id: string; current_revision_id: string }; content: string }> } };
 type PendingCandidateResponse = { result?: { value?: Candidate[] } };
-type QueryRun = { id: string; answer?: string; citations?: Array<{ excerpt: string }>; knowledge_version: number; profile_version: string; trace?: Array<{ sequence: number; stage: string; payload: string }> };
+type AgentPrompt = { id: string; topic: string; detail: string; state: "open" };
+type AgentPromptResponse = { result?: { value?: AgentPrompt[] } };
+type QueryRun = { id: string; answer?: string; refusal_reason?: string; citations?: Array<{ excerpt: string }>; knowledge_version: number; profile_version: string; trace?: Array<{ sequence: number; stage: string; payload: string }> };
 type AnswerView = "concise" | "citations" | "detailed";
 type RevisionReason = "typo" | "format" | "entry_error" | "opinion_change" | "fact_update" | "time_change" | "correction";
 type Revision = { id: string; content: string };
@@ -17,6 +19,7 @@ export function App() {
   const [candidates, setCandidates] = useState<Candidate[]>([]);
   const [knowledge, setKnowledge] = useState<Knowledge[]>([]);
 	const [revisionReason, setRevisionReason] = useState<RevisionReason>("entry_error");
+	const [agentPrompts, setAgentPrompts] = useState<AgentPrompt[]>([]);
   const [question, setQuestion] = useState("");
   const [answer, setAnswer] = useState("尚未查询。");
 	const [citations, setCitations] = useState<string[]>([]);
@@ -34,6 +37,11 @@ export function App() {
 		setCandidates(response.result?.value ?? []);
 	}
 
+	async function refreshAgentPrompts() {
+		const response = await invoke<AgentPromptResponse>("desktop_agent_pending_list");
+		setAgentPrompts(response.result?.value ?? []);
+	}
+
 	useEffect(() => {
 		async function connectCore() {
 			try {
@@ -43,7 +51,7 @@ export function App() {
 					return;
 				}
 				await invoke("desktop_core_start");
-				await Promise.all([refreshKnowledge(), refreshPendingCandidates()]);
+				await Promise.all([refreshKnowledge(), refreshPendingCandidates(), refreshAgentPrompts()]);
 				setCoreStatus("Go 核心已由桌面 gateway 启动。");
 			} catch {
 				setCoreStatus("浏览器预览模式：未连接桌面 gateway。" );
@@ -149,6 +157,15 @@ export function App() {
     }
   }
 
+  async function resolveAgentPrompt(prompt: AgentPrompt, action: "close" | "ignore" | "defer") {
+    try {
+      await invoke("desktop_resolve_missing_evidence_prompt", { pendingId: prompt.id, action });
+      await refreshAgentPrompts();
+    } catch {
+      setCoreStatus("更新 Agent 提示失败：核心请求被拒绝。");
+    }
+  }
+
   async function ask(event: FormEvent) {
     event.preventDefault();
     const trimmedQuestion = question.trim();
@@ -160,6 +177,10 @@ export function App() {
       setAnswer(run.answer || "无法基于个人知识回答。");
       setCitations((run.citations ?? []).map((citation) => citation.excerpt));
 		setQueryRun(run);
+		if (run.refusal_reason === "no_local_evidence") {
+			await invoke("desktop_suggest_missing_evidence", { question: trimmedQuestion }).catch(() => undefined);
+			await refreshAgentPrompts().catch(() => undefined);
+		}
     } catch {
       setCitations([]);
 		setQueryRun(null);
@@ -240,6 +261,14 @@ export function App() {
 			</dl>
 		</details>}
       </section>
+		<section aria-labelledby="agent-title">
+			<h2 id="agent-title">Agent 待处理</h2>
+			<p>仅在本地证据不足时创建提示；不会周期性打扰，也不会调用网络或模型。</p>
+			{agentPrompts.length === 0 ? <p>暂无待处理提示。</p> : agentPrompts.map((prompt) => <article key={prompt.id} className="card">
+				<p>{prompt.detail}</p>
+				<p><button onClick={() => resolveAgentPrompt(prompt, "close")}>关闭</button> <button onClick={() => resolveAgentPrompt(prompt, "defer")}>延后一天</button> <button onClick={() => resolveAgentPrompt(prompt, "ignore")}>忽略后续</button></p>
+			</article>)}
+		</section>
       <footer>目标平台：{supportedPlatforms.join("、")}（Debian/Ubuntu Linux）</footer>
     </main>
   );
