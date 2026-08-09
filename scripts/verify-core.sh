@@ -15,4 +15,7 @@ first_import=$("$binary" import --data-dir "$data_dir/state" --kind text --conte
 second_import=$("$binary" import --data-dir "$data_dir/state" --kind text --content 'Go agent evidence' --idempotency-key verify-import --json)
 printf '%s' "$first_import" | grep -q '"replayed":false'
 printf '%s' "$second_import" | grep -q '"replayed":true'
-"$binary" query --data-dir "$data_dir/state" --question 'unmatched query' --mode strict --json | grep -q '"refusal_reason":"no_local_evidence"'
+query_result=$("$binary" query --data-dir "$data_dir/state" --question 'unmatched query' --mode strict --json)
+printf '%s' "$query_result" | grep -q '"refusal_reason":"no_local_evidence"'
+run_id=$(printf '%s' "$query_result" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+"$binary" run --data-dir "$data_dir/state" --run-id "$run_id" --json | grep -q '"trace"'
