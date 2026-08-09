@@ -2,7 +2,7 @@ import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { supportedPlatforms } from "./projectScope";
 
-type Candidate = { id: string | number; content: string; state: "proposed" | "editing" | "promoted" | "rejected"; version: number };
+type Candidate = { id: string | number; content: string; state: "proposed" | "editing" | "promoted" | "rejected" | "superseded"; version: number };
 type Knowledge = { id: string | number; content: string; currentRevisionId: string };
 type SourceDocument = { id: string; kind: "text" | "markdown"; content: string; display_name?: string; input_at: string };
 type KnowledgeListResponse = { result?: { value?: Array<{ knowledge: { id: string; current_revision_id: string }; content: string }> } };
@@ -19,6 +19,7 @@ export function App() {
 	const [displayName, setDisplayName] = useState("GUI text");
 	const [sourceKind, setSourceKind] = useState<"text" | "markdown">("text");
   const [candidates, setCandidates] = useState<Candidate[]>([]);
+	const [selectedCandidateIds, setSelectedCandidateIds] = useState<Set<string>>(new Set());
   const [knowledge, setKnowledge] = useState<Knowledge[]>([]);
 	const [revisionReason, setRevisionReason] = useState<RevisionReason>("entry_error");
 	const [agentPrompts, setAgentPrompts] = useState<AgentPrompt[]>([]);
@@ -99,8 +100,8 @@ export function App() {
     setCandidates((items) => items.map((item) => (item.id === id ? { ...item, content } : item)));
   }
 
-  async function saveCandidate(candidate: Candidate, content: string) {
-    if (content === candidate.content) return;
+  async function saveCandidate(candidate: Candidate, content: string): Promise<Candidate | null> {
+    if (content === candidate.content) return candidate;
     try {
       const response = await invoke<{ result?: { value?: Candidate } }>("desktop_update_candidate", {
         candidateId: String(candidate.id),
@@ -110,15 +111,19 @@ export function App() {
       const saved = response.result?.value;
       if (!saved) throw new Error("missing candidate response");
       setCandidates((items) => items.map((item) => (item.id === candidate.id ? saved : item)));
+      return saved;
     } catch {
       setCandidates((items) => items.map((item) => (item.id === candidate.id ? candidate : item)));
       setCoreStatus("保存候选失败：候选已变更或核心请求被拒绝。");
+      return null;
     }
   }
 
   async function promote(candidate: Candidate) {
+		const saved = await saveCandidate(candidate, candidate.content);
+		if (!saved) return;
     try {
-      await invoke("desktop_promote_candidate", { candidateId: String(candidate.id) });
+			await invoke("desktop_promote_candidate", { candidateId: String(saved.id) });
 		await Promise.all([refreshKnowledge(), refreshRecoverableWorkspace()]);
 	} catch {
 		await Promise.all([refreshKnowledge().catch(() => undefined), refreshRecoverableWorkspace().catch(() => undefined)]);
@@ -127,14 +132,62 @@ export function App() {
   }
 
   async function reject(candidate: Candidate) {
+		const saved = await saveCandidate(candidate, candidate.content);
+		if (!saved) return;
     try {
-      await invoke("desktop_reject_candidate", { candidateId: String(candidate.id), expectedVersion: candidate.version });
+			await invoke("desktop_reject_candidate", { candidateId: String(saved.id), expectedVersion: saved.version });
 		await refreshRecoverableWorkspace();
 	} catch {
 		await refreshRecoverableWorkspace().catch(() => undefined);
       setCoreStatus("拒绝候选失败：候选已变更或核心请求被拒绝。");
     }
   }
+
+	function toggleCandidateSelection(candidateId: string | number) {
+		setSelectedCandidateIds((items) => {
+			const next = new Set(items);
+			const id = String(candidateId);
+			if (next.has(id)) next.delete(id);
+			else next.add(id);
+			return next;
+		});
+	}
+
+	async function splitCandidate(candidate: Candidate) {
+		const saved = await saveCandidate(candidate, candidate.content);
+		if (!saved) return;
+		const parts = saved.content.split(/\n\s*\n/).map((part) => part.trim()).filter(Boolean);
+		if (parts.length < 2) {
+			setCoreStatus("拆分候选需要至少两段以空行分隔的内容。");
+			return;
+		}
+		try {
+			await invoke("desktop_split_candidate", { candidateId: String(saved.id), expectedVersion: saved.version, parts });
+			setSelectedCandidateIds(new Set());
+			await refreshRecoverableWorkspace();
+		} catch {
+			await refreshRecoverableWorkspace().catch(() => undefined);
+			setCoreStatus("拆分候选失败：候选已变更或核心请求被拒绝。");
+		}
+	}
+
+	async function mergeSelectedCandidates() {
+		const selected = activeCandidates.filter((candidate) => selectedCandidateIds.has(String(candidate.id)));
+		if (selected.length < 2) {
+			setCoreStatus("请勾选至少两条候选后再合并。");
+			return;
+		}
+		try {
+			const saved = await Promise.all(selected.map((candidate) => saveCandidate(candidate, candidate.content)));
+			if (saved.some((candidate) => candidate === null)) return;
+			await invoke("desktop_merge_candidates", { candidates: saved.map((candidate) => ({ id: String(candidate!.id), expectedVersion: candidate!.version })) });
+			setSelectedCandidateIds(new Set());
+			await refreshRecoverableWorkspace();
+		} catch {
+			await refreshRecoverableWorkspace().catch(() => undefined);
+			setCoreStatus("合并候选失败：候选已变更、来源不同或核心请求被拒绝。");
+		}
+	}
 
   function updateKnowledge(id: string | number, content: string) {
     setKnowledge((items) => items.map((item) => (item.id === id ? { ...item, content } : item)));
@@ -225,10 +278,13 @@ export function App() {
       </section>
       <section aria-labelledby="candidate-title">
         <h2 id="candidate-title">候选审批</h2>
+		<p>拆分会按空行分段；合并会保留来源顺序最靠前的候选，其余候选标记为已并入。</p>
+		{activeCandidates.length >= 2 && <p><button type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => void mergeSelectedCandidates()}>合并勾选候选</button></p>}
         {activeCandidates.length === 0 ? <p>暂无待确认候选。</p> : activeCandidates.map((candidate) => (
           <article key={candidate.id} className="card">
+			<label><input type="checkbox" checked={selectedCandidateIds.has(String(candidate.id))} onChange={() => toggleCandidateSelection(candidate.id)} /> 选择合并</label>
             <textarea aria-label="候选内容" value={candidate.content} onChange={(event) => updateCandidate(candidate.id, event.target.value)} onBlur={(event) => void saveCandidate(candidate, event.target.value)} />
-            <p><button onClick={() => promote(candidate)}>确认入库</button> <button onClick={() => reject(candidate)}>拒绝</button></p>
+			<p><button type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => void splitCandidate(candidate)}>按空行拆分</button> <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => void promote(candidate)}>确认入库</button> <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => void reject(candidate)}>拒绝</button></p>
           </article>
         ))}
       </section>

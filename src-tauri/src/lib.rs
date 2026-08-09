@@ -11,6 +11,12 @@ struct DesktopCoreStatus {
     ready: bool,
 }
 
+#[derive(serde::Deserialize, serde::Serialize)]
+struct CandidateReference {
+    id: String,
+    expected_version: i64,
+}
+
 #[tauri::command]
 fn desktop_core_status(
     data_root: tauri::State<'_, data_root::DefaultDataRoot>,
@@ -178,6 +184,60 @@ fn desktop_update_candidate(
 }
 
 #[tauri::command]
+fn desktop_split_candidate(
+    candidate_id: String,
+    expected_version: i64,
+    parts: Vec<String>,
+    sidecar: tauri::State<'_, sidecar::SidecarLaunch>,
+    process: tauri::State<'_, sidecar::CoreProcess>,
+) -> Result<serde_json::Value, String> {
+    let parts = split_parts(parts)?;
+    process
+        .request_with_idempotency(
+            &sidecar,
+            "candidate.split",
+            serde_json::json!({"id":candidate_id,"expected_version":expected_version,"parts":parts}),
+            Some(&gateway_key("gui-candidate-split")?),
+        )
+        .map_err(str::to_owned)
+}
+
+fn split_parts(parts: Vec<String>) -> Result<Vec<String>, String> {
+    let parts: Vec<_> = parts
+        .into_iter()
+        .map(|part| part.trim().to_owned())
+        .filter(|part| !part.is_empty())
+        .collect();
+    if parts.len() < 2 {
+        return Err("at least two non-empty candidate parts are required".to_owned());
+    }
+    Ok(parts)
+}
+
+#[tauri::command]
+fn desktop_merge_candidates(
+    candidates: Vec<CandidateReference>,
+    sidecar: tauri::State<'_, sidecar::SidecarLaunch>,
+    process: tauri::State<'_, sidecar::CoreProcess>,
+) -> Result<serde_json::Value, String> {
+    if candidates.len() < 2
+        || candidates
+            .iter()
+            .any(|candidate| candidate.id.trim().is_empty() || candidate.expected_version < 1)
+    {
+        return Err("at least two versioned candidates are required".to_owned());
+    }
+    process
+        .request_with_idempotency(
+            &sidecar,
+            "candidate.merge",
+            serde_json::json!({"candidates":candidates}),
+            Some(&gateway_key("gui-candidate-merge")?),
+        )
+        .map_err(str::to_owned)
+}
+
+#[tauri::command]
 fn desktop_query(
     question: String,
     mode: Option<String>,
@@ -324,6 +384,8 @@ pub fn run() {
             desktop_promote_candidate,
             desktop_reject_candidate,
             desktop_update_candidate,
+            desktop_split_candidate,
+            desktop_merge_candidates,
             desktop_query,
             desktop_knowledge_source,
             desktop_revise_knowledge,
@@ -374,5 +436,14 @@ mod tests {
             Ok("markdown")
         );
         assert!(super::import_kind(Some("pdf".to_owned())).is_err());
+    }
+
+    #[test]
+    fn split_parts_rejects_empty_segments() {
+        assert_eq!(
+            super::split_parts(vec![" first ".to_owned(), "second".to_owned()]),
+            Ok(vec!["first".to_owned(), "second".to_owned()])
+        );
+        assert!(super::split_parts(vec!["one".to_owned(), "  ".to_owned()]).is_err());
     }
 }
