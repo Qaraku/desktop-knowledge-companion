@@ -38,6 +38,15 @@ revision_id=$(printf '%s' "$promoted" | sed -n 's/.*"revision":{"id":"\([^"]*\)"
 rejected_import=$("$binary" import --data-dir "$data_dir/state" --kind text --content 'Rejected candidate' --idempotency-key verify-reject --json)
 rejected_id=$(printf '%s' "$rejected_import" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
 "$binary" candidate-reject --data-dir "$data_dir/state" --candidate-id "$rejected_id" --expected-version 1 --json | grep -q '"state":"rejected"'
+markdown_import=$("$binary" import --data-dir "$data_dir/state" --kind markdown --content '# First
+
+Alpha
+
+# Second
+
+Beta' --idempotency-key verify-markdown --json)
+printf '%s' "$markdown_import" | grep -Fq '"title_path":["First"]'
+printf '%s' "$markdown_import" | grep -Fq '"title_path":["Second"]'
 "$binary" agent-tool-inspect --data-dir "$data_dir/state" --tool-name network.search --json | grep -q '"allowed":false'
 agent_approval=$("$binary" agent-tool-request-approval --data-dir "$data_dir/state" --tool-name candidate.promote --parameters '{"candidate_id":"agent-check"}' --json)
 agent_approval_id=$(printf '%s' "$agent_approval" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
@@ -52,5 +61,7 @@ pending_id=$(printf '%s' "$prompt" | sed -n 's/.*"pending_item":{"id":"\([^"]*\)
 "$binary" agent-prompt-suggest --data-dir "$data_dir/state" --topic missing-evidence --detail 'Import relevant material' --json | grep -q '"suppressed":true'
 query_result=$("$binary" query --data-dir "$data_dir/state" --question 'unmatched query' --mode strict --json)
 printf '%s' "$query_result" | grep -q '"refusal_reason":"no_local_evidence"'
+"$binary" query --data-dir "$data_dir/state" --question 'unmatched query' --mode augment --json | grep -q '未配置补充来源'
+"$binary" query --data-dir "$data_dir/state" --question 'unmatched query' --mode clarify --json | grep -q '请补充相关背景或导入资料'
 run_id=$(printf '%s' "$query_result" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
 "$binary" run --data-dir "$data_dir/state" --run-id "$run_id" --json | grep -q '"trace"'
