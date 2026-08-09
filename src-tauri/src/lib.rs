@@ -32,6 +32,16 @@ fn desktop_core_start(
 }
 
 #[tauri::command]
+fn desktop_core_state_snapshot(
+    sidecar: tauri::State<'_, sidecar::SidecarLaunch>,
+    process: tauri::State<'_, sidecar::CoreProcess>,
+) -> Result<serde_json::Value, String> {
+    process
+        .request(&sidecar, "core.state_snapshot", serde_json::json!({}))
+        .map_err(str::to_owned)
+}
+
+#[tauri::command]
 fn desktop_knowledge_list(
     sidecar: tauri::State<'_, sidecar::SidecarLaunch>,
     process: tauri::State<'_, sidecar::CoreProcess>,
@@ -272,6 +282,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             desktop_core_status,
             desktop_core_start,
+            desktop_core_state_snapshot,
             desktop_knowledge_list,
             desktop_pending_candidate_list,
             desktop_import_text,
