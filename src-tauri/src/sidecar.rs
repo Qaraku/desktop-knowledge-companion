@@ -98,7 +98,7 @@ fn sidecar_file_name() -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::SidecarLaunch;
+    use super::{CoreProcess, SidecarLaunch};
     use std::path::PathBuf;
 
     #[test]
@@ -124,5 +124,23 @@ mod tests {
                 data.display().to_string()
             ]
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn health_round_trip_uses_stdio_json_rpc() {
+        use std::fs;
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = std::env::temp_dir().join(format!("knowledge-sidecar-{}", std::process::id()));
+        let binaries = root.join("binaries");
+        fs::create_dir_all(&binaries).unwrap();
+        let executable = binaries.join("knowledge-core");
+        fs::write(&executable, "#!/bin/sh\nread line\nprintf '%s\\n' '{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"value\":{\"ready\":true}}}'\n").unwrap();
+        fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
+        let launch = SidecarLaunch::new(root.clone(), root.join("data")).unwrap();
+        let value = CoreProcess::default().health(&launch).unwrap();
+        assert_eq!(value["result"]["value"]["ready"], true);
+        fs::remove_dir_all(root).unwrap();
     }
 }
