@@ -111,6 +111,23 @@ func (store *Store) ListCandidates(ctx context.Context, ingestionID string) ([]d
 	return result, rows.Err()
 }
 
+func (store *Store) ListPendingCandidates(ctx context.Context) ([]domain.Candidate, error) {
+	rows, err := store.db.QueryContext(ctx, `SELECT id, ingestion_id, ordinal, version, content, title_path_json, state, COALESCE(promoted_knowledge_id, ''), updated_at FROM candidate_items WHERE state IN ('proposed', 'editing') ORDER BY updated_at DESC, ingestion_id, ordinal`)
+	if err != nil {
+		return nil, fmt.Errorf("list pending candidates: %w", err)
+	}
+	defer rows.Close()
+	result := make([]domain.Candidate, 0)
+	for rows.Next() {
+		item, err := scanCandidate(rows)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, item)
+	}
+	return result, rows.Err()
+}
+
 type KnowledgeSummary struct {
 	Knowledge domain.Knowledge `json:"knowledge"`
 	Content   string           `json:"content"`

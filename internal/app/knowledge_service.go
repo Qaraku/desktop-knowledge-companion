@@ -36,6 +36,10 @@ func (service *KnowledgeService) RejectCandidate(ctx context.Context, id string,
 	return service.store.RejectCandidate(ctx, id, expectedVersion)
 }
 
+func (service *KnowledgeService) ListPendingCandidates(ctx context.Context) ([]domain.Candidate, error) {
+	return service.store.ListPendingCandidates(ctx)
+}
+
 func (service *KnowledgeService) RequestCandidatePromotion(ctx context.Context, candidateID, caller string) (store.Approval, error) {
 	if strings.TrimSpace(caller) == "" {
 		return store.Approval{}, fmt.Errorf("caller is required")

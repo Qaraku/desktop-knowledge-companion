@@ -90,3 +90,27 @@ func TestRejectedCandidateRetainsImmutableSource(t *testing.T) {
 		t.Fatalf("source was not retained: %q, %v", sourceContent, err)
 	}
 }
+
+func TestListPendingCandidatesExcludesRejectedAndPromotedItems(t *testing.T) {
+	storage, err := store.Open(context.Background(), t.TempDir())
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer storage.Close()
+	service := NewKnowledgeService(storage)
+	pending, err := service.Import(context.Background(), "text", "Pending", "", "import-pending")
+	if err != nil {
+		t.Fatalf("import pending: %v", err)
+	}
+	rejected, err := service.Import(context.Background(), "text", "Rejected", "", "import-rejected")
+	if err != nil {
+		t.Fatalf("import rejected: %v", err)
+	}
+	if _, err := service.RejectCandidate(context.Background(), rejected.Candidates[0].ID, 1); err != nil {
+		t.Fatalf("reject candidate: %v", err)
+	}
+	items, err := service.ListPendingCandidates(context.Background())
+	if err != nil || len(items) != 1 || items[0].ID != pending.Candidates[0].ID {
+		t.Fatalf("pending candidates = %#v, %v", items, err)
+	}
+}
