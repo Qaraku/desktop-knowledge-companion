@@ -81,9 +81,6 @@ impl CoreProcess {
         params: serde_json::Value,
         idempotency_key: Option<&str>,
     ) -> Result<serde_json::Value, &'static str> {
-        self.start(launch)?;
-        let mut child = self.0.lock().map_err(|_| "core process lock poisoned")?;
-        let process = child.as_mut().ok_or("core process was not started")?;
         let mut meta = serde_json::json!({"protocol_version":1,"request_id":"0198c787-8bf0-7afe-8c7d-9a41c6671c23","caller":"gateway"});
         if let Some(key) = idempotency_key {
             meta["idempotency_key"] = serde_json::Value::String(key.to_owned());
@@ -91,6 +88,24 @@ impl CoreProcess {
         let request =
             serde_json::json!({"jsonrpc":"2.0","id":1,"method":method,"params":params,"meta":meta})
                 .to_string();
+
+        match self.request_once(launch, &request) {
+            Ok(response) => Ok(response),
+            Err(_) => {
+                self.reset()?;
+                self.request_once(launch, &request)
+            }
+        }
+    }
+
+    fn request_once(
+        &self,
+        launch: &SidecarLaunch,
+        request: &str,
+    ) -> Result<serde_json::Value, &'static str> {
+        self.start(launch)?;
+        let mut child = self.0.lock().map_err(|_| "core process lock poisoned")?;
+        let process = child.as_mut().ok_or("core process was not started")?;
         let stdin = process.stdin.as_mut().ok_or("core stdin is unavailable")?;
         stdin
             .write_all(request.as_bytes())
@@ -109,7 +124,19 @@ impl CoreProcess {
         BufReader::new(stdout)
             .read_line(&mut response)
             .map_err(|_| "failed to read core health response")?;
+        if response.is_empty() {
+            return Err("core closed the response stream");
+        }
         serde_json::from_str(&response).map_err(|_| "invalid core health response")
+    }
+
+    fn reset(&self) -> Result<(), &'static str> {
+        let mut child = self.0.lock().map_err(|_| "core process lock poisoned")?;
+        if let Some(mut process) = child.take() {
+            let _ = process.kill();
+            let _ = process.wait();
+        }
+        Ok(())
     }
 }
 
@@ -162,6 +189,25 @@ mod tests {
         fs::create_dir_all(&binaries).unwrap();
         let executable = binaries.join("knowledge-core");
         fs::write(&executable, "#!/bin/sh\nread line\nprintf '%s\\n' '{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"value\":{\"ready\":true}}}'\n").unwrap();
+        fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
+        let launch = SidecarLaunch::new(root.clone(), root.join("data")).unwrap();
+        let value = CoreProcess::default().health(&launch).unwrap();
+        assert_eq!(value["result"]["value"]["ready"], true);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn retries_once_after_sidecar_exits_before_response() {
+        use std::fs;
+        use std::os::unix::fs::PermissionsExt;
+
+        let root =
+            std::env::temp_dir().join(format!("knowledge-sidecar-retry-{}", std::process::id()));
+        let binaries = root.join("binaries");
+        fs::create_dir_all(&binaries).unwrap();
+        let executable = binaries.join("knowledge-core");
+        fs::write(&executable, "#!/bin/sh\nstate=\"$0.state\"\nread line\nif [ ! -f \"$state\" ]; then\n  : > \"$state\"\n  exit 1\nfi\nprintf '%s\\n' '{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"value\":{\"ready\":true}}}'\n").unwrap();
         fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
         let launch = SidecarLaunch::new(root.clone(), root.join("data")).unwrap();
         let value = CoreProcess::default().health(&launch).unwrap();
