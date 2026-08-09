@@ -26,8 +26,8 @@ fn desktop_core_status(
 fn desktop_core_start(
     sidecar: tauri::State<'_, sidecar::SidecarLaunch>,
     process: tauri::State<'_, sidecar::CoreProcess>,
-) -> Result<(), String> {
-    process.start(&sidecar).map_err(str::to_owned)
+) -> Result<serde_json::Value, String> {
+    process.health(&sidecar).map_err(str::to_owned)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

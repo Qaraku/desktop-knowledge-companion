@@ -1,3 +1,4 @@
+use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
@@ -58,6 +59,32 @@ impl CoreProcess {
             .map_err(|_| "failed to start Go sidecar")?;
         *child = Some(process);
         Ok(())
+    }
+
+    pub(crate) fn health(&self, launch: &SidecarLaunch) -> Result<serde_json::Value, &'static str> {
+        self.start(launch)?;
+        let mut child = self.0.lock().map_err(|_| "core process lock poisoned")?;
+        let process = child.as_mut().ok_or("core process was not started")?;
+        let request = r#"{"jsonrpc":"2.0","id":1,"method":"core.health","params":{},"meta":{"protocol_version":1,"request_id":"0198c787-8bf0-7afe-8c7d-9a41c6671c23","caller":"gateway"}}"#;
+        let stdin = process.stdin.as_mut().ok_or("core stdin is unavailable")?;
+        stdin
+            .write_all(request.as_bytes())
+            .map_err(|_| "failed to write core health request")?;
+        stdin
+            .write_all(b"\n")
+            .map_err(|_| "failed to finish core health request")?;
+        stdin
+            .flush()
+            .map_err(|_| "failed to flush core health request")?;
+        let stdout = process
+            .stdout
+            .as_mut()
+            .ok_or("core stdout is unavailable")?;
+        let mut response = String::new();
+        BufReader::new(stdout)
+            .read_line(&mut response)
+            .map_err(|_| "failed to read core health response")?;
+        serde_json::from_str(&response).map_err(|_| "invalid core health response")
     }
 }
 
