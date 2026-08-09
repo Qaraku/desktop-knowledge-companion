@@ -5,9 +5,8 @@ import { supportedPlatforms } from "./projectScope";
 type Candidate = { id: string | number; content: string; state: "proposed" | "editing" | "promoted" | "rejected"; version: number };
 type Knowledge = { id: string | number; content: string; currentRevisionId: string };
 type KnowledgeListResponse = { result?: { value?: Array<{ knowledge: { id: string; current_revision_id: string }; content: string }> } };
-type PendingCandidateResponse = { result?: { value?: Candidate[] } };
 type AgentPrompt = { id: string; topic: string; detail: string; state: "open" };
-type AgentPromptResponse = { result?: { value?: AgentPrompt[] } };
+type CoreStateSnapshotResponse = { result?: { value?: { pending_candidates?: Candidate[]; pending_prompts?: AgentPrompt[] } } };
 type QueryRun = { id: string; answer?: string; refusal_reason?: string; citations?: Array<{ excerpt: string }>; knowledge_version: number; profile_version: string; trace?: Array<{ sequence: number; stage: string; payload: string }> };
 type AnswerView = "concise" | "citations" | "detailed";
 type RevisionReason = "typo" | "format" | "entry_error" | "opinion_change" | "fact_update" | "time_change" | "correction";
@@ -32,14 +31,10 @@ export function App() {
 		setKnowledge((response.result?.value ?? []).map((item) => ({ id: item.knowledge.id, content: item.content, currentRevisionId: item.knowledge.current_revision_id })));
 	}
 
-	async function refreshPendingCandidates() {
-		const response = await invoke<PendingCandidateResponse>("desktop_pending_candidate_list");
-		setCandidates(response.result?.value ?? []);
-	}
-
-	async function refreshAgentPrompts() {
-		const response = await invoke<AgentPromptResponse>("desktop_agent_pending_list");
-		setAgentPrompts(response.result?.value ?? []);
+	async function refreshRecoverableWorkspace() {
+		const response = await invoke<CoreStateSnapshotResponse>("desktop_core_state_snapshot");
+		setCandidates(response.result?.value?.pending_candidates ?? []);
+		setAgentPrompts(response.result?.value?.pending_prompts ?? []);
 	}
 
 	useEffect(() => {
@@ -51,7 +46,7 @@ export function App() {
 					return;
 				}
 				await invoke("desktop_core_start");
-				await Promise.all([refreshKnowledge(), refreshPendingCandidates(), refreshAgentPrompts()]);
+				await Promise.all([refreshKnowledge(), refreshRecoverableWorkspace()]);
 				setCoreStatus("Go 核心已由桌面 gateway 启动。");
 			} catch {
 				setCoreStatus("浏览器预览模式：未连接桌面 gateway。" );
@@ -76,7 +71,7 @@ export function App() {
       setSource("");
 		setDisplayName("GUI text");
     } catch {
-		await refreshPendingCandidates().catch(() => undefined);
+		await refreshRecoverableWorkspace().catch(() => undefined);
       setCoreStatus("导入失败：核心不可用或拒绝了请求。");
     }
   }
@@ -117,9 +112,9 @@ export function App() {
   async function promote(candidate: Candidate) {
     try {
       await invoke("desktop_promote_candidate", { candidateId: String(candidate.id) });
-      await Promise.all([refreshKnowledge(), refreshPendingCandidates()]);
-    } catch {
-		await Promise.all([refreshKnowledge().catch(() => undefined), refreshPendingCandidates().catch(() => undefined)]);
+		await Promise.all([refreshKnowledge(), refreshRecoverableWorkspace()]);
+	} catch {
+		await Promise.all([refreshKnowledge().catch(() => undefined), refreshRecoverableWorkspace().catch(() => undefined)]);
       setCoreStatus("确认入库失败：审批或核心请求被拒绝。");
     }
   }
@@ -127,9 +122,9 @@ export function App() {
   async function reject(candidate: Candidate) {
     try {
       await invoke("desktop_reject_candidate", { candidateId: String(candidate.id), expectedVersion: candidate.version });
-      await refreshPendingCandidates();
-    } catch {
-		await refreshPendingCandidates().catch(() => undefined);
+		await refreshRecoverableWorkspace();
+	} catch {
+		await refreshRecoverableWorkspace().catch(() => undefined);
       setCoreStatus("拒绝候选失败：候选已变更或核心请求被拒绝。");
     }
   }
@@ -160,7 +155,7 @@ export function App() {
   async function resolveAgentPrompt(prompt: AgentPrompt, action: "close" | "ignore" | "defer") {
     try {
       await invoke("desktop_resolve_missing_evidence_prompt", { pendingId: prompt.id, action });
-      await refreshAgentPrompts();
+		await refreshRecoverableWorkspace();
     } catch {
       setCoreStatus("更新 Agent 提示失败：核心请求被拒绝。");
     }
@@ -179,7 +174,7 @@ export function App() {
 		setQueryRun(run);
 		if (run.refusal_reason === "no_local_evidence") {
 			await invoke("desktop_suggest_missing_evidence", { question: trimmedQuestion }).catch(() => undefined);
-			await refreshAgentPrompts().catch(() => undefined);
+			await refreshRecoverableWorkspace().catch(() => undefined);
 		}
     } catch {
       setCitations([]);
