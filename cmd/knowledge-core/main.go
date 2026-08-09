@@ -24,7 +24,7 @@ func main() {
 
 func run(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: knowledge-core <serve|health|state-snapshot|import|candidate-list|candidate-pending|candidate-update|candidate-reject|candidate-approval|approval-resolve|candidate-promote|knowledge|knowledge-revise|agent-tool-inspect|agent-tool-request-approval|agent-tool-consume-approval|agent-prompt-suggest|agent-prompt-preference-set|agent-pending-list|agent-pending-resolve|query|run> --data-dir <absolute-path> [--json]")
+		return errors.New("usage: knowledge-core <serve|health|state-snapshot|import|candidate-list|candidate-pending|candidate-update|candidate-reject|candidate-approval|approval-resolve|candidate-promote|knowledge|knowledge-revise|agent-tool-inspect|agent-tool-request-approval|agent-tool-consume-approval|agent-prompt-suggest|agent-prompt-preference-set|agent-pending-list|agent-pending-resolve|query|query-cancel|run> --data-dir <absolute-path> [--json]")
 	}
 	command := args[0]
 	flags := flag.NewFlagSet(command, flag.ContinueOnError)
@@ -45,6 +45,8 @@ func run(args []string) error {
 		question = flags.String("question", "", "question to answer")
 		mode = flags.String("mode", "strict", "strict, augment, or clarify")
 		profile = flags.String("profile-version", "local_v1", "query profile version")
+	case "query-cancel":
+		runID = flags.String("run-id", "", "active query run identifier")
 	case "run":
 		runID = flags.String("run-id", "", "query run identifier")
 	case "candidate-list":
@@ -227,6 +229,12 @@ func run(args []string) error {
 		return writeResult(map[string]bool{"resolved": true}, *jsonOutput)
 	case "query":
 		result, err := app.NewQueryService(core).Ask(context.Background(), *question, *mode, *profile)
+		if err != nil {
+			return err
+		}
+		return writeResult(result, *jsonOutput)
+	case "query-cancel":
+		result, err := app.NewQueryService(core).CancelRun(context.Background(), *runID)
 		if err != nil {
 			return err
 		}

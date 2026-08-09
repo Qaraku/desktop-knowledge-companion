@@ -152,6 +152,27 @@ func TestStateSnapshotIncludesRecoverableWorkspaceState(t *testing.T) {
 	}
 }
 
+func TestServerCancelsActiveQueryRun(t *testing.T) {
+	core, err := store.Open(context.Background(), t.TempDir())
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer core.Close()
+	if _, err := core.DB().Exec(`INSERT INTO query_runs(id, question, mode, knowledge_version, profile_version, state, created_at) VALUES ('run-cancel', 'pending', 'strict', 0, 'local_v1', 'running', '2026-08-09T00:00:00Z')`); err != nil {
+		t.Fatalf("create active run: %v", err)
+	}
+	response := NewServer(core).dispatch(context.Background(), request{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage("1"),
+		Method:  "query.cancel",
+		Params:  json.RawMessage(`{"run_id":"run-cancel"}`),
+		Meta:    meta{ProtocolVersion: 1, RequestID: "0198c787-8bf0-7afe-8c7d-9a41c6671c23", Caller: "test", IdempotencyKey: "rpc-query-cancel-1"},
+	})
+	if response.Error != nil {
+		t.Fatalf("cancel response: %#v", response.Error)
+	}
+}
+
 func TestServerDispatchesKnowledgeRevision(t *testing.T) {
 	core, err := store.Open(context.Background(), t.TempDir())
 	if err != nil {

@@ -360,6 +360,14 @@ func (server *Server) call(ctx context.Context, item request) (any, error) {
 			return nil, err
 		}
 		return server.query.GetRun(ctx, p.RunID)
+	case "query.cancel":
+		var p struct {
+			RunID string `json:"run_id"`
+		}
+		if err := json.Unmarshal(item.Params, &p); err != nil {
+			return nil, err
+		}
+		return server.query.CancelRun(ctx, p.RunID)
 	default:
 		return nil, errMethodNotFound
 	}
@@ -369,7 +377,7 @@ var errMethodNotFound = errors.New("method not found")
 
 func writeMethod(method string) bool {
 	switch method {
-	case "import.create", "candidate.update", "candidate.reject", "candidate.request_approval", "approval.resolve", "candidate.approve", "knowledge.revise", "agent.tool.request_approval", "agent.tool.consume_approval", "agent.prompt.suggest", "agent.prompt.preference.set", "agent.pending.resolve", "query.start":
+	case "import.create", "candidate.update", "candidate.reject", "candidate.request_approval", "approval.resolve", "candidate.approve", "knowledge.revise", "agent.tool.request_approval", "agent.tool.consume_approval", "agent.prompt.suggest", "agent.prompt.preference.set", "agent.pending.resolve", "query.start", "query.cancel":
 		return true
 	}
 	return false

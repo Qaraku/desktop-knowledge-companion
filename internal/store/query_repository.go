@@ -143,6 +143,21 @@ func (store *Store) GetQueryRun(ctx context.Context, runID string) (domain.Query
 	return run, traces.Err()
 }
 
+func (store *Store) CancelQueryRun(ctx context.Context, runID string) (domain.QueryRun, error) {
+	result, err := store.db.ExecContext(ctx, `UPDATE query_runs SET state = 'cancelled', refusal_reason = 'cancelled', completed_at = ? WHERE id = ? AND state IN ('queued', 'running')`, time.Now().UTC().Format(time.RFC3339Nano), runID)
+	if err != nil {
+		return domain.QueryRun{}, fmt.Errorf("cancel query run: %w", err)
+	}
+	count, _ := result.RowsAffected()
+	if count == 0 {
+		if _, err := store.GetQueryRun(ctx, runID); errors.Is(err, ErrNotFound) {
+			return domain.QueryRun{}, ErrNotFound
+		}
+		return domain.QueryRun{}, ErrInvalidState
+	}
+	return store.GetQueryRun(ctx, runID)
+}
+
 func (store *Store) ListActiveQueryRuns(ctx context.Context) ([]domain.QueryRun, error) {
 	rows, err := store.db.QueryContext(ctx, `SELECT id, question, mode, knowledge_version, profile_version, state, created_at FROM query_runs WHERE state IN ('queued', 'running') ORDER BY created_at ASC`)
 	if err != nil {

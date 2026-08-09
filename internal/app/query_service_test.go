@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -61,5 +62,24 @@ func TestStrictQueryWithoutEvidenceRefusesWithoutCitation(t *testing.T) {
 	}
 	if run.RefusalReason != "no_local_evidence" || run.Answer != "" || len(run.Citations) != 0 {
 		t.Fatalf("unexpected strict refusal: %#v", run)
+	}
+}
+
+func TestActiveQueryRunCanBeCancelledOnlyOnce(t *testing.T) {
+	storage, err := store.Open(context.Background(), t.TempDir())
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer storage.Close()
+	if _, err := storage.DB().Exec(`INSERT INTO query_runs(id, question, mode, knowledge_version, profile_version, state, created_at) VALUES ('run-active', 'pending', 'strict', 0, 'local_v1', 'running', '2026-08-09T00:00:00Z')`); err != nil {
+		t.Fatalf("create active run: %v", err)
+	}
+	service := NewQueryService(storage)
+	cancelled, err := service.CancelRun(context.Background(), "run-active")
+	if err != nil || cancelled.State != "cancelled" || cancelled.RefusalReason != "cancelled" {
+		t.Fatalf("cancel run = %#v, %v", cancelled, err)
+	}
+	if _, err := service.CancelRun(context.Background(), "run-active"); !errors.Is(err, store.ErrInvalidState) {
+		t.Fatalf("repeat cancel = %v", err)
 	}
 }

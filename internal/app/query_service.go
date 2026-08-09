@@ -22,3 +22,7 @@ func (service *QueryService) Ask(ctx context.Context, question, mode, profileVer
 func (service *QueryService) GetRun(ctx context.Context, runID string) (domain.QueryRun, error) {
 	return service.store.GetQueryRun(ctx, runID)
 }
+
+func (service *QueryService) CancelRun(ctx context.Context, runID string) (domain.QueryRun, error) {
+	return service.store.CancelQueryRun(ctx, runID)
+}
