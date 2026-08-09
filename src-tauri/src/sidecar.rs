@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Child, Command, Stdio};
+use std::sync::Mutex;
 
 #[derive(Debug)]
 pub(crate) struct SidecarLaunch {
@@ -30,6 +31,33 @@ impl SidecarLaunch {
     #[allow(dead_code)]
     pub(crate) fn executable(&self) -> &Path {
         &self.executable
+    }
+}
+
+#[derive(Default)]
+pub(crate) struct CoreProcess(Mutex<Option<Child>>);
+
+impl CoreProcess {
+    pub(crate) fn start(&self, launch: &SidecarLaunch) -> Result<(), &'static str> {
+        let mut child = self.0.lock().map_err(|_| "core process lock poisoned")?;
+        if child
+            .as_mut()
+            .is_some_and(|process| process.try_wait().ok().flatten().is_none())
+        {
+            return Ok(());
+        }
+        if !launch.executable.is_file() {
+            return Err("packaged Go sidecar is unavailable");
+        }
+        let process = launch
+            .command()
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|_| "failed to start Go sidecar")?;
+        *child = Some(process);
+        Ok(())
     }
 }
 
