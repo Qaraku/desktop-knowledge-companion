@@ -160,6 +160,34 @@ BEGIN
   SELECT RAISE(ABORT, 'terminal query trace is immutable');
 END;`,
 	},
+	{
+		version: 5,
+		sql: `
+CREATE TABLE agent_tool_events (
+  id TEXT PRIMARY KEY,
+  run_id TEXT REFERENCES query_runs(id),
+  tool_name TEXT NOT NULL,
+  risk_level TEXT NOT NULL,
+  state TEXT NOT NULL CHECK(state IN ('requested', 'denied', 'approval_required', 'executed')),
+  parameter_hash TEXT NOT NULL,
+  detail TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE TABLE prompt_preferences (
+  topic TEXT PRIMARY KEY,
+  state TEXT NOT NULL CHECK(state IN ('ignored', 'deferred', 'closed')),
+  deferred_until TEXT,
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE pending_items (
+  id TEXT PRIMARY KEY,
+  topic TEXT NOT NULL,
+  detail TEXT NOT NULL,
+  state TEXT NOT NULL CHECK(state IN ('open', 'ignored', 'deferred', 'closed')),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);`,
+	},
 }
 
 func currentSchemaVersion(migrations []migration) int {
