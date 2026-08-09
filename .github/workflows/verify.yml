@@ -87,6 +87,27 @@ jobs:
       - name: Bundle Windows installer
         if: runner.os == 'Windows'
         run: npm run tauri -- build --bundles nsis
+      - name: Install and smoke test Windows installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installer = @(Get-ChildItem src-tauri/target/release/bundle/nsis/*.exe | Select-Object -First 1)
+          if ($installer.Count -ne 1) { throw 'expected exactly one NSIS installer' }
+          $result = Start-Process -FilePath $installer[0].FullName -ArgumentList '/S' -Wait -PassThru
+          if ($result.ExitCode -ne 0) { throw "NSIS installer failed with exit code $($result.ExitCode)" }
+          $installRoot = Join-Path $env:LOCALAPPDATA 'Desktop Knowledge Companion'
+          $desktop = Join-Path $installRoot 'desktop_knowledge_companion.exe'
+          $core = Join-Path $installRoot 'knowledge-core.exe'
+          if (!(Test-Path -LiteralPath $desktop -PathType Leaf)) { throw "desktop executable missing: $desktop" }
+          if (!(Test-Path -LiteralPath $core -PathType Leaf)) { throw "sidecar missing: $core" }
+          $manifests = @(Get-ChildItem -LiteralPath $installRoot -Recurse -Filter sidecar-manifest.json -File)
+          if ($manifests.Count -ne 1) { throw "expected one manifest, found $($manifests.Count)" }
+          if (!(Select-String -LiteralPath $manifests[0].FullName -Pattern '"schema_version"\s*:\s*7' -Quiet)) { throw 'sidecar manifest schema mismatch' }
+          $dataDirectory = Join-Path $env:RUNNER_TEMP 'desktop-knowledge-companion-ci'
+          $health = & $core health --data-dir $dataDirectory --json
+          if ($LASTEXITCODE -ne 0) { throw "sidecar health failed with exit code $LASTEXITCODE" }
+          if ($health -notmatch '"ready":true,"schema_version":7') { throw "unexpected sidecar health: $health" }
       - name: Record Windows installer checksum
         if: runner.os == 'Windows'
         shell: pwsh
