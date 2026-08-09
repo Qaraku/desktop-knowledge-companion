@@ -61,6 +61,54 @@ fn desktop_import_text(
     process.request_with_idempotency(&sidecar, "import.create", serde_json::json!({"kind":"text","content":content,"display_name":display_name.unwrap_or_default()}), Some(&key)).map_err(str::to_owned)
 }
 
+fn gateway_key(prefix: &str) -> Result<String, String> {
+    Ok(format!(
+        "{prefix}-{}",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|_| "clock unavailable".to_owned())?
+            .as_nanos()
+    ))
+}
+
+#[tauri::command]
+fn desktop_promote_candidate(
+    candidate_id: String,
+    sidecar: tauri::State<'_, sidecar::SidecarLaunch>,
+    process: tauri::State<'_, sidecar::CoreProcess>,
+) -> Result<serde_json::Value, String> {
+    let approval = process
+        .request_with_idempotency(
+            &sidecar,
+            "candidate.request_approval",
+            serde_json::json!({"candidate_id":candidate_id}),
+            Some(&gateway_key("gui-approval")?),
+        )
+        .map_err(str::to_owned)?;
+    let approval_id = approval["result"]["value"]["id"]
+        .as_str()
+        .ok_or("invalid approval response".to_owned())?;
+    let resolved = process
+        .request_with_idempotency(
+            &sidecar,
+            "approval.resolve",
+            serde_json::json!({"approval_id":approval_id,"approve":true}),
+            Some(&gateway_key("gui-resolve")?),
+        )
+        .map_err(str::to_owned)?;
+    let token = resolved["result"]["value"]["token"]
+        .as_str()
+        .ok_or("invalid approval token".to_owned())?;
+    process
+        .request_with_idempotency(
+            &sidecar,
+            "candidate.approve",
+            serde_json::json!({"candidate_id":candidate_id,"token":token}),
+            Some(&gateway_key("gui-promote")?),
+        )
+        .map_err(str::to_owned)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -69,7 +117,8 @@ pub fn run() {
             desktop_core_status,
             desktop_core_start,
             desktop_knowledge_list,
-            desktop_import_text
+            desktop_import_text,
+            desktop_promote_candidate
         ])
         .setup(|app| {
             let resolved = app.path().app_local_data_dir()?;
