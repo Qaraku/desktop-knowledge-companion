@@ -65,6 +65,27 @@ func TestStrictQueryWithoutEvidenceRefusesWithoutCitation(t *testing.T) {
 	}
 }
 
+func TestNonStrictQueriesExplainTheirEvidenceBoundary(t *testing.T) {
+	storage, err := store.Open(context.Background(), t.TempDir())
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer storage.Close()
+
+	for mode, want := range map[string]string{
+		"augment": "未配置补充来源",
+		"clarify": "请补充相关背景或导入资料",
+	} {
+		run, err := NewQueryService(storage).Ask(context.Background(), "unrelated question", mode, "local_v1")
+		if err != nil {
+			t.Fatalf("ask %s: %v", mode, err)
+		}
+		if !strings.Contains(run.Answer, want) || run.RefusalReason != "" || len(run.Citations) != 0 {
+			t.Fatalf("unexpected %s response: %#v", mode, run)
+		}
+	}
+}
+
 func TestActiveQueryRunCanBeCancelledOnlyOnce(t *testing.T) {
 	storage, err := store.Open(context.Background(), t.TempDir())
 	if err != nil {

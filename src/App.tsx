@@ -9,6 +9,7 @@ type AgentPrompt = { id: string; topic: string; detail: string; state: "open" };
 type CoreStateSnapshotResponse = { result?: { value?: { pending_candidates?: Candidate[]; pending_prompts?: AgentPrompt[] } } };
 type QueryRun = { id: string; answer?: string; refusal_reason?: string; citations?: Array<{ excerpt: string }>; knowledge_version: number; profile_version: string; trace?: Array<{ sequence: number; stage: string; payload: string }> };
 type AnswerView = "concise" | "citations" | "detailed";
+type QueryMode = "strict" | "augment" | "clarify";
 type RevisionReason = "typo" | "format" | "entry_error" | "opinion_change" | "fact_update" | "time_change" | "correction";
 type Revision = { id: string; content: string };
 
@@ -23,6 +24,7 @@ export function App() {
   const [answer, setAnswer] = useState("尚未查询。");
 	const [citations, setCitations] = useState<string[]>([]);
 	const [answerView, setAnswerView] = useState<AnswerView>("citations");
+	const [queryMode, setQueryMode] = useState<QueryMode>("strict");
 	const [queryRun, setQueryRun] = useState<QueryRun | null>(null);
 	const [coreStatus, setCoreStatus] = useState("桌面 gateway 未连接。");
 
@@ -166,13 +168,13 @@ export function App() {
     const trimmedQuestion = question.trim();
     if (!trimmedQuestion) return;
     try {
-      const response = await invoke<{ result?: { value?: QueryRun } }>("desktop_query", { question: trimmedQuestion });
+      const response = await invoke<{ result?: { value?: QueryRun } }>("desktop_query", { question: trimmedQuestion, mode: queryMode });
       const run = response.result?.value;
       if (!run) throw new Error("missing query response");
       setAnswer(run.answer || "无法基于个人知识回答。");
       setCitations((run.citations ?? []).map((citation) => citation.excerpt));
 		setQueryRun(run);
-		if (run.refusal_reason === "no_local_evidence") {
+		if (run.refusal_reason === "no_local_evidence" || (queryMode === "clarify" && (run.citations ?? []).length === 0)) {
 			await invoke("desktop_suggest_missing_evidence", { question: trimmedQuestion }).catch(() => undefined);
 			await refreshRecoverableWorkspace().catch(() => undefined);
 		}
@@ -231,9 +233,17 @@ export function App() {
         {knowledge.length === 0 ? <p>尚无已确认知识。</p> : knowledge.map((item) => <article key={item.id} className="card"><textarea aria-label="正式知识内容" value={item.content} onChange={(event) => updateKnowledge(item.id, event.target.value)} onBlur={(event) => void saveKnowledge(item, event.target.value)} /></article>)}
       </section>
       <section aria-labelledby="query-title">
-        <h2 id="query-title">严格问答</h2>
+        <h2 id="query-title">个人知识问答</h2>
         <form onSubmit={ask}>
           <label>问题 <input value={question} onChange={(event) => setQuestion(event.target.value)} /></label>
+			<label>
+				知识不足时
+				<select value={queryMode} onChange={(event) => setQueryMode(event.target.value as QueryMode)}>
+					<option value="strict">严格拒答</option>
+					<option value="augment">补充说明（当前未配置外部来源）</option>
+					<option value="clarify">请求补充</option>
+				</select>
+			</label>
 			<label>
 				展示层级
 				<select value={answerView} onChange={(event) => setAnswerView(event.target.value as AnswerView)}>
@@ -250,7 +260,7 @@ export function App() {
 			<summary>本次运行观察</summary>
 			<dl>
 				<div><dt>运行 ID</dt><dd>{queryRun.id}</dd></div>
-				<div><dt>来源边界</dt><dd>仅本地个人知识；未配置网络或模型来源。</dd></div>
+				<div><dt>来源边界</dt><dd>{queryMode === "augment" ? "本地个人知识；网络或模型补充来源未配置。" : "仅本地个人知识；未配置网络或模型来源。"}</dd></div>
 				<div><dt>知识版本 / Profile</dt><dd>{queryRun.knowledge_version} / {queryRun.profile_version}</dd></div>
 				<div><dt>检索轨迹</dt><dd>{(queryRun.trace ?? []).map((trace) => `${trace.sequence}. ${trace.stage} ${trace.payload}`).join("；") || "无"}</dd></div>
 			</dl>

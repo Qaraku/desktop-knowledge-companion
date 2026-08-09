@@ -170,20 +170,30 @@ fn desktop_update_candidate(
 #[tauri::command]
 fn desktop_query(
     question: String,
+    mode: Option<String>,
     sidecar: tauri::State<'_, sidecar::SidecarLaunch>,
     process: tauri::State<'_, sidecar::CoreProcess>,
 ) -> Result<serde_json::Value, String> {
     if question.trim().is_empty() {
         return Err("question is required".to_owned());
     }
+    let mode = query_mode(mode)?;
     process
         .request_with_idempotency(
             &sidecar,
             "query.start",
-            serde_json::json!({"question":question,"mode":"strict","profile_version":"local_v1"}),
+            serde_json::json!({"question":question,"mode":mode,"profile_version":"local_v1"}),
             Some(&gateway_key("gui-query")?),
         )
         .map_err(str::to_owned)
+}
+
+fn query_mode(mode: Option<String>) -> Result<String, String> {
+    let mode = mode.unwrap_or_else(|| "strict".to_owned());
+    match mode.as_str() {
+        "strict" | "augment" | "clarify" => Ok(mode),
+        _ => Err("invalid query mode".to_owned()),
+    }
 }
 
 #[tauri::command]
@@ -310,4 +320,19 @@ pub fn run() {
         })
         .run(tauri::generate_context!())
         .expect("error while running desktop knowledge companion");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::query_mode;
+
+    #[test]
+    fn query_mode_defaults_and_rejects_unknown_values() {
+        assert_eq!(query_mode(None).as_deref(), Ok("strict"));
+        assert_eq!(
+            query_mode(Some("clarify".to_owned())).as_deref(),
+            Ok("clarify")
+        );
+        assert!(query_mode(Some("unknown".to_owned())).is_err());
+    }
 }
