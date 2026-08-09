@@ -3,7 +3,9 @@ package store
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"time"
 
@@ -73,6 +75,26 @@ func (store *Store) SetPromptPreference(ctx context.Context, topic, state string
 	}
 	_, err := store.db.ExecContext(ctx, `INSERT INTO prompt_preferences(topic, state, deferred_until, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(topic) DO UPDATE SET state = excluded.state, deferred_until = excluded.deferred_until, updated_at = excluded.updated_at`, topic, state, until, time.Now().UTC().Format(time.RFC3339Nano))
 	return err
+}
+
+func (store *Store) GetPromptPreference(ctx context.Context, topic string) (string, *time.Time, error) {
+	var state string
+	var deferred sql.NullString
+	err := store.db.QueryRowContext(ctx, "SELECT state, deferred_until FROM prompt_preferences WHERE topic = ?", topic).Scan(&state, &deferred)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil, ErrNotFound
+	}
+	if err != nil {
+		return "", nil, err
+	}
+	if !deferred.Valid {
+		return state, nil, nil
+	}
+	value, err := time.Parse(time.RFC3339Nano, deferred.String)
+	if err != nil {
+		return "", nil, err
+	}
+	return state, &value, nil
 }
 
 func parameterHash(parameters string) string {

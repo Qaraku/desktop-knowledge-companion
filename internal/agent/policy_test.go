@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"testing"
+	"time"
 
 	"desktop-knowledge-companion/internal/store"
 )
@@ -23,6 +24,22 @@ func TestRegistryEnforcesClosedToolAndApprovalPolicy(t *testing.T) {
 	}
 	if decision := registry.Decide("knowledge.read", false); !decision.Allowed {
 		t.Fatalf("read tool rejected: %#v", decision)
+	}
+}
+
+func TestPromptPreferencePersists(t *testing.T) {
+	storage, err := store.Open(context.Background(), t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer storage.Close()
+	until := time.Now().UTC().Add(time.Hour).Round(0)
+	if err := storage.SetPromptPreference(context.Background(), "missing-evidence", "deferred", &until); err != nil {
+		t.Fatal(err)
+	}
+	state, restored, err := storage.GetPromptPreference(context.Background(), "missing-evidence")
+	if err != nil || state != "deferred" || restored == nil || !restored.Equal(until) {
+		t.Fatalf("preference = %q, %v, %v", state, restored, err)
 	}
 }
 
