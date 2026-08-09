@@ -4,11 +4,13 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"regexp"
 	"strings"
 
+	"desktop-knowledge-companion/internal/app"
 	"desktop-knowledge-companion/internal/store"
 )
 
@@ -51,7 +53,17 @@ type response struct {
 	Error   *rpcError       `json:"error,omitempty"`
 }
 
-func Serve(ctx context.Context, input io.Reader, output io.Writer, diagnostics io.Writer, core *store.Store) error {
+type Server struct {
+	store     *store.Store
+	knowledge *app.KnowledgeService
+	query     *app.QueryService
+}
+
+func NewServer(core *store.Store) *Server {
+	return &Server{store: core, knowledge: app.NewKnowledgeService(core), query: app.NewQueryService(core)}
+}
+
+func Serve(ctx context.Context, input io.Reader, output io.Writer, diagnostics io.Writer, server *Server) error {
 	scanner := bufio.NewScanner(input)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	encoder := json.NewEncoder(output)
@@ -75,20 +87,7 @@ func Serve(ctx context.Context, input io.Reader, output io.Writer, diagnostics i
 			continue
 		}
 
-		var next response
-		switch item.Method {
-		case "core.health":
-			next = response{
-				JSONRPC: "2.0",
-				ID:      item.ID,
-				Result: struct {
-					RequestID string `json:"request_id"`
-					store.Health
-				}{RequestID: item.Meta.RequestID, Health: core.Health()},
-			}
-		default:
-			next = errorResponse(item.ID, item.Meta.RequestID, "NOT_FOUND", "method is not available", false)
-		}
+		next := server.dispatch(ctx, item)
 		if err := encoder.Encode(next); err != nil {
 			return fmt.Errorf("write JSON-RPC response: %w", err)
 		}
@@ -98,6 +97,140 @@ func Serve(ctx context.Context, input io.Reader, output io.Writer, diagnostics i
 		return fmt.Errorf("read JSON-RPC input: %w", err)
 	}
 	return ctx.Err()
+}
+
+func (server *Server) dispatch(ctx context.Context, item request) response {
+	if writeMethod(item.Method) && item.Meta.IdempotencyKey == "" {
+		return errorResponse(item.ID, item.Meta.RequestID, "VALIDATION_FAILED", "idempotency_key is required for writes", false)
+	}
+	result, err := server.call(ctx, item)
+	if err != nil {
+		return errorResponse(item.ID, item.Meta.RequestID, errorCode(err), "request could not be completed", false)
+	}
+	return response{JSONRPC: "2.0", ID: item.ID, Result: struct {
+		RequestID string `json:"request_id"`
+		Value     any    `json:"value"`
+	}{RequestID: item.Meta.RequestID, Value: result}}
+}
+
+func (server *Server) call(ctx context.Context, item request) (any, error) {
+	switch item.Method {
+	case "core.health":
+		return server.store.Health(), nil
+	case "core.state_snapshot":
+		return map[string]any{"health": server.store.Health()}, nil
+	case "import.create":
+		var p struct {
+			Kind        string `json:"kind"`
+			Content     string `json:"content"`
+			DisplayName string `json:"display_name"`
+		}
+		if err := json.Unmarshal(item.Params, &p); err != nil {
+			return nil, err
+		}
+		return server.knowledge.Import(ctx, p.Kind, p.Content, p.DisplayName, item.Meta.IdempotencyKey)
+	case "candidate.list":
+		var p struct {
+			IngestionID string `json:"ingestion_id"`
+		}
+		if err := json.Unmarshal(item.Params, &p); err != nil {
+			return nil, err
+		}
+		return server.store.ListCandidates(ctx, p.IngestionID)
+	case "candidate.update":
+		var p struct {
+			ID              string
+			ExpectedVersion int `json:"expected_version"`
+			Content         string
+		}
+		if err := json.Unmarshal(item.Params, &p); err != nil {
+			return nil, err
+		}
+		return server.knowledge.EditCandidate(ctx, p.ID, p.ExpectedVersion, p.Content)
+	case "candidate.reject":
+		var p struct {
+			ID              string
+			ExpectedVersion int `json:"expected_version"`
+		}
+		if err := json.Unmarshal(item.Params, &p); err != nil {
+			return nil, err
+		}
+		return server.knowledge.RejectCandidate(ctx, p.ID, p.ExpectedVersion)
+	case "candidate.request_approval":
+		var p struct {
+			CandidateID string `json:"candidate_id"`
+		}
+		if err := json.Unmarshal(item.Params, &p); err != nil {
+			return nil, err
+		}
+		return server.knowledge.RequestCandidatePromotion(ctx, p.CandidateID, item.Meta.Caller)
+	case "approval.resolve":
+		var p struct {
+			ApprovalID string `json:"approval_id"`
+			Approve    bool
+		}
+		if err := json.Unmarshal(item.Params, &p); err != nil {
+			return nil, err
+		}
+		return server.knowledge.ResolveApproval(ctx, p.ApprovalID, item.Meta.Caller, p.Approve)
+	case "candidate.approve":
+		var p struct {
+			CandidateID string `json:"candidate_id"`
+			Token       string
+		}
+		if err := json.Unmarshal(item.Params, &p); err != nil {
+			return nil, err
+		}
+		knowledge, revision, err := server.knowledge.PromoteCandidate(ctx, p.CandidateID, p.Token, item.Meta.Caller)
+		return map[string]any{"knowledge": knowledge, "revision": revision}, err
+	case "query.start":
+		var p struct {
+			Question       string `json:"question"`
+			Mode           string `json:"mode"`
+			ProfileVersion string `json:"profile_version"`
+		}
+		if err := json.Unmarshal(item.Params, &p); err != nil {
+			return nil, err
+		}
+		return server.query.Ask(ctx, p.Question, p.Mode, p.ProfileVersion)
+	case "query.get":
+		var p struct {
+			RunID string `json:"run_id"`
+		}
+		if err := json.Unmarshal(item.Params, &p); err != nil {
+			return nil, err
+		}
+		return server.query.GetRun(ctx, p.RunID)
+	default:
+		return nil, errMethodNotFound
+	}
+}
+
+var errMethodNotFound = errors.New("method not found")
+
+func writeMethod(method string) bool {
+	switch method {
+	case "import.create", "candidate.update", "candidate.reject", "candidate.request_approval", "approval.resolve", "candidate.approve", "query.start":
+		return true
+	}
+	return false
+}
+
+func errorCode(err error) string {
+	switch {
+	case errors.Is(err, errMethodNotFound):
+		return "NOT_FOUND"
+	case errors.Is(err, store.ErrNotFound):
+		return "NOT_FOUND"
+	case errors.Is(err, store.ErrVersionConflict):
+		return "VERSION_CONFLICT"
+	case errors.Is(err, store.ErrApprovalInvalid):
+		return "APPROVAL_INVALID"
+	case errors.Is(err, store.ErrInvalidState):
+		return "VALIDATION_FAILED"
+	default:
+		return "VALIDATION_FAILED"
+	}
 }
 
 func validateRequest(item request) (response, bool) {
