@@ -74,6 +74,13 @@ func TestServerDispatchesIdempotentImportAndCandidateRead(t *testing.T) {
 	if candidates := result.([]domain.Candidate); len(candidates) != 1 || candidates[0].Content != "Go Agent" {
 		t.Fatalf("unexpected candidates: %#v", candidates)
 	}
+	candidate, err := server.call(context.Background(), request{Method: "candidate.get", Params: json.RawMessage(`{"id":"` + value.Candidates[0].ID + `"}`)})
+	if err != nil {
+		t.Fatalf("candidate get: %v", err)
+	}
+	if item := candidate.(domain.Candidate); item.ID != value.Candidates[0].ID || item.Content != "Go Agent" {
+		t.Fatalf("unexpected candidate: %#v", item)
+	}
 	pending, err := server.call(context.Background(), request{Method: "candidate.pending.list", Params: json.RawMessage(`{}`)})
 	if err != nil {
 		t.Fatalf("pending candidates: %v", err)

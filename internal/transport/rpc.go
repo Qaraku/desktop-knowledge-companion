@@ -194,6 +194,14 @@ func (server *Server) call(ctx context.Context, item request) (any, error) {
 			return nil, err
 		}
 		return server.store.ListCandidates(ctx, p.IngestionID)
+	case "candidate.get":
+		var p struct {
+			ID string `json:"id"`
+		}
+		if err := json.Unmarshal(item.Params, &p); err != nil {
+			return nil, err
+		}
+		return server.store.GetCandidate(ctx, p.ID)
 	case "candidate.pending.list":
 		return server.knowledge.ListPendingCandidates(ctx)
 	case "candidate.update":

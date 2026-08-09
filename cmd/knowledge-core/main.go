@@ -24,7 +24,7 @@ func main() {
 
 func run(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: knowledge-core <serve|health|state-snapshot|import|candidate-list|candidate-pending|candidate-update|candidate-reject|candidate-approval|approval-resolve|candidate-promote|knowledge|knowledge-get|knowledge-revise|knowledge-link-conflict|agent-tool-inspect|agent-tool-request-approval|agent-tool-consume-approval|agent-prompt-suggest|agent-prompt-preference-set|agent-pending-list|agent-pending-resolve|query|query-cancel|run> --data-dir <absolute-path> [--json]")
+		return errors.New("usage: knowledge-core <serve|health|state-snapshot|import|candidate-list|candidate-get|candidate-pending|candidate-update|candidate-reject|candidate-approval|approval-resolve|candidate-promote|knowledge|knowledge-get|knowledge-revise|knowledge-link-conflict|agent-tool-inspect|agent-tool-request-approval|agent-tool-consume-approval|agent-prompt-suggest|agent-prompt-preference-set|agent-pending-list|agent-pending-resolve|query|query-cancel|run> --data-dir <absolute-path> [--json]")
 	}
 	command := args[0]
 	flags := flag.NewFlagSet(command, flag.ContinueOnError)
@@ -51,6 +51,8 @@ func run(args []string) error {
 		runID = flags.String("run-id", "", "query run identifier")
 	case "candidate-list":
 		ingestionID = flags.String("ingestion-id", "", "ingestion identifier")
+	case "candidate-get":
+		candidateID = flags.String("candidate-id", "", "candidate identifier")
 	case "candidate-pending":
 	case "candidate-update":
 		candidateID = flags.String("candidate-id", "", "candidate identifier")
@@ -143,6 +145,12 @@ func run(args []string) error {
 		return writeResult(result, *jsonOutput)
 	case "candidate-list":
 		result, err := core.ListCandidates(context.Background(), *ingestionID)
+		if err != nil {
+			return err
+		}
+		return writeResult(result, *jsonOutput)
+	case "candidate-get":
+		result, err := core.GetCandidate(context.Background(), *candidateID)
 		if err != nil {
 			return err
 		}

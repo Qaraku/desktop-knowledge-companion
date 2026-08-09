@@ -21,6 +21,7 @@ updated=$(
   "$binary" candidate-update --data-dir "$data_dir/state" --candidate-id "$candidate_id" --expected-version 1 --content 'Go agent evidence revised' --json
 )
 printf '%s' "$updated" | grep -q '"state":"editing"'
+"$binary" candidate-get --data-dir "$data_dir/state" --candidate-id "$candidate_id" --json | grep -q 'Go agent evidence revised'
 "$binary" candidate-pending --data-dir "$data_dir/state" --json | grep -q 'Go agent evidence revised'
 approval=$("$binary" candidate-approval --data-dir "$data_dir/state" --candidate-id "$candidate_id" --json)
 approval_id=$(printf '%s' "$approval" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
