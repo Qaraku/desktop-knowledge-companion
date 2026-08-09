@@ -47,6 +47,9 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           dpkg-deb -c src-tauri/target/release/bundle/deb/*.deb | grep 'usr/bin/knowledge-core'
+          package_root=$(mktemp -d)
+          dpkg-deb -x src-tauri/target/release/bundle/deb/*.deb "$package_root"
+          "$package_root/usr/bin/knowledge-core" health --data-dir "$package_root/data" --json | grep '"ready":true'
       - name: Bundle Windows installer
         if: runner.os == 'Windows'
         run: npm run tauri -- build --bundles nsis
