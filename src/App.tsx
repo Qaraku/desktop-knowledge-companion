@@ -6,7 +6,8 @@ type Candidate = { id: string | number; content: string; state: "proposed" | "ed
 type Knowledge = { id: string | number; content: string };
 type KnowledgeListResponse = { result?: { value?: Array<{ knowledge: { id: string }; content: string }> } };
 type PendingCandidateResponse = { result?: { value?: Candidate[] } };
-type QueryRun = { answer?: string; refusal_reason?: string; citations?: Array<{ excerpt: string }> };
+type QueryRun = { id: string; answer?: string; citations?: Array<{ excerpt: string }>; knowledge_version: number; profile_version: string; trace?: Array<{ sequence: number; stage: string; payload: string }> };
+type AnswerView = "concise" | "citations" | "detailed";
 
 export function App() {
   const [source, setSource] = useState("");
@@ -16,6 +17,8 @@ export function App() {
   const [question, setQuestion] = useState("");
   const [answer, setAnswer] = useState("尚未查询。");
 	const [citations, setCitations] = useState<string[]>([]);
+	const [answerView, setAnswerView] = useState<AnswerView>("citations");
+	const [queryRun, setQueryRun] = useState<QueryRun | null>(null);
 	const [coreStatus, setCoreStatus] = useState("桌面 gateway 未连接。");
 
 	async function refreshKnowledge() {
@@ -130,8 +133,10 @@ export function App() {
       if (!run) throw new Error("missing query response");
       setAnswer(run.answer || "无法基于个人知识回答。");
       setCitations((run.citations ?? []).map((citation) => citation.excerpt));
+		setQueryRun(run);
     } catch {
       setCitations([]);
+		setQueryRun(null);
       setAnswer("查询失败：核心不可用或拒绝了请求。");
     }
   }
@@ -175,10 +180,27 @@ export function App() {
         <h2 id="query-title">严格问答</h2>
         <form onSubmit={ask}>
           <label>问题 <input value={question} onChange={(event) => setQuestion(event.target.value)} /></label>
+			<label>
+				展示层级
+				<select value={answerView} onChange={(event) => setAnswerView(event.target.value as AnswerView)}>
+					<option value="concise">简洁</option>
+					<option value="citations">引用</option>
+					<option value="detailed">详细观察</option>
+				</select>
+			</label>
           <button type="submit">查询</button>
         </form>
         <output>{answer}</output>
-        {citations.length > 0 && <ol aria-label="个人知识引用">{citations.map((citation, index) => <li key={`${index}-${citation}`}>{citation}</li>)}</ol>}
+		{answerView !== "concise" && citations.length > 0 && <ol aria-label="个人知识引用">{citations.map((citation, index) => <li key={`${index}-${citation}`}>{citation}</li>)}</ol>}
+		{answerView === "detailed" && queryRun && <details open>
+			<summary>本次运行观察</summary>
+			<dl>
+				<div><dt>运行 ID</dt><dd>{queryRun.id}</dd></div>
+				<div><dt>来源边界</dt><dd>仅本地个人知识；未配置网络或模型来源。</dd></div>
+				<div><dt>知识版本 / Profile</dt><dd>{queryRun.knowledge_version} / {queryRun.profile_version}</dd></div>
+				<div><dt>检索轨迹</dt><dd>{(queryRun.trace ?? []).map((trace) => `${trace.sequence}. ${trace.stage} ${trace.payload}`).join("；") || "无"}</dd></div>
+			</dl>
+		</details>}
       </section>
       <footer>目标平台：{supportedPlatforms.join("、")}（Debian/Ubuntu Linux）</footer>
     </main>
