@@ -57,9 +57,15 @@ export function App() {
     setCandidates((items) => items.map((item) => (item.id === id ? { ...item, content } : item)));
   }
 
-  function promote(candidate: Candidate) {
-    setCandidates((items) => items.map((item) => (item.id === candidate.id ? { ...item, state: "promoted" } : item)));
-    setKnowledge((items) => [...items, { id: candidate.id, content: candidate.content }]);
+  async function promote(candidate: Candidate) {
+    try {
+      await invoke("desktop_promote_candidate", { candidateId: String(candidate.id) });
+      const response = await invoke<KnowledgeListResponse>("desktop_knowledge_list");
+      setKnowledge((response.result?.value ?? []).map((item) => ({ id: item.knowledge.id, content: item.content })));
+      setCandidates((items) => items.map((item) => (item.id === candidate.id ? { ...item, state: "promoted" } : item)));
+    } catch {
+      setCoreStatus("确认入库失败：审批或核心请求被拒绝。");
+    }
   }
 
   function reject(id: string | number) {
