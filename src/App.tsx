@@ -3,17 +3,20 @@ import { invoke } from "@tauri-apps/api/core";
 import { supportedPlatforms } from "./projectScope";
 
 type Candidate = { id: string | number; content: string; state: "proposed" | "editing" | "promoted" | "rejected"; version: number };
-type Knowledge = { id: string | number; content: string };
-type KnowledgeListResponse = { result?: { value?: Array<{ knowledge: { id: string }; content: string }> } };
+type Knowledge = { id: string | number; content: string; currentRevisionId: string };
+type KnowledgeListResponse = { result?: { value?: Array<{ knowledge: { id: string; current_revision_id: string }; content: string }> } };
 type PendingCandidateResponse = { result?: { value?: Candidate[] } };
 type QueryRun = { id: string; answer?: string; citations?: Array<{ excerpt: string }>; knowledge_version: number; profile_version: string; trace?: Array<{ sequence: number; stage: string; payload: string }> };
 type AnswerView = "concise" | "citations" | "detailed";
+type RevisionReason = "typo" | "format" | "entry_error" | "opinion_change" | "fact_update" | "time_change" | "correction";
+type Revision = { id: string; content: string };
 
 export function App() {
   const [source, setSource] = useState("");
 	const [displayName, setDisplayName] = useState("GUI text");
   const [candidates, setCandidates] = useState<Candidate[]>([]);
   const [knowledge, setKnowledge] = useState<Knowledge[]>([]);
+	const [revisionReason, setRevisionReason] = useState<RevisionReason>("entry_error");
   const [question, setQuestion] = useState("");
   const [answer, setAnswer] = useState("尚未查询。");
 	const [citations, setCitations] = useState<string[]>([]);
@@ -23,7 +26,7 @@ export function App() {
 
 	async function refreshKnowledge() {
 		const response = await invoke<KnowledgeListResponse>("desktop_knowledge_list");
-		setKnowledge((response.result?.value ?? []).map((item) => ({ id: item.knowledge.id, content: item.content })));
+		setKnowledge((response.result?.value ?? []).map((item) => ({ id: item.knowledge.id, content: item.content, currentRevisionId: item.knowledge.current_revision_id })));
 	}
 
 	async function refreshPendingCandidates() {
@@ -123,6 +126,29 @@ export function App() {
     }
   }
 
+  function updateKnowledge(id: string | number, content: string) {
+    setKnowledge((items) => items.map((item) => (item.id === id ? { ...item, content } : item)));
+  }
+
+  async function saveKnowledge(item: Knowledge, content: string) {
+    if (content === item.content) return;
+    try {
+      const response = await invoke<{ result?: { value?: Revision } }>("desktop_revise_knowledge", {
+        knowledgeId: String(item.id),
+        expectedRevisionId: item.currentRevisionId,
+        content,
+        reason: revisionReason,
+      });
+      const revision = response.result?.value;
+      if (!revision) throw new Error("missing revision response");
+      setKnowledge((items) => items.map((current) => (current.id === item.id ? { ...current, content: revision.content, currentRevisionId: revision.id } : current)));
+    } catch {
+      setKnowledge((items) => items.map((current) => (current.id === item.id ? item : current)));
+      await refreshKnowledge().catch(() => undefined);
+      setCoreStatus("保存修订失败：当前版本已变更或核心请求被拒绝。");
+    }
+  }
+
   async function ask(event: FormEvent) {
     event.preventDefault();
     const trimmedQuestion = question.trim();
@@ -174,7 +200,19 @@ export function App() {
       </section>
       <section aria-labelledby="knowledge-title">
         <h2 id="knowledge-title">正式知识</h2>
-        {knowledge.length === 0 ? <p>尚无已确认知识。</p> : <ul>{knowledge.map((item) => <li key={item.id}>{item.content}</li>)}</ul>}
+		<label>
+			修订理由
+			<select value={revisionReason} onChange={(event) => setRevisionReason(event.target.value as RevisionReason)}>
+				<option value="typo">错别字</option>
+				<option value="format">格式</option>
+				<option value="entry_error">录入错误</option>
+				<option value="opinion_change">观点变化</option>
+				<option value="fact_update">事实更新</option>
+				<option value="time_change">时效变化</option>
+				<option value="correction">修正</option>
+			</select>
+		</label>
+        {knowledge.length === 0 ? <p>尚无已确认知识。</p> : knowledge.map((item) => <article key={item.id} className="card"><textarea aria-label="正式知识内容" value={item.content} onChange={(event) => updateKnowledge(item.id, event.target.value)} onBlur={(event) => void saveKnowledge(item, event.target.value)} /></article>)}
       </section>
       <section aria-labelledby="query-title">
         <h2 id="query-title">严格问答</h2>
