@@ -27,7 +27,10 @@ jobs:
       - run: sh scripts/verify-core.sh
         shell: bash
       - name: Build Go sidecar
-        run: go build -o artifacts/knowledge-core${{ runner.os == 'Windows' && '.exe' || '' }} ./cmd/knowledge-core
+        shell: bash
+        run: |
+          mkdir -p artifacts
+          go build -o artifacts/knowledge-core${{ runner.os == 'Windows' && '.exe' || '' }} ./cmd/knowledge-core
       - name: Prepare Tauri sidecar resource
         run: sh scripts/prepare-sidecar.sh
         shell: bash
@@ -66,9 +69,16 @@ jobs:
           test -f "$package_root/squashfs-root/usr/lib/Desktop Knowledge Companion/sidecar-manifest.json"
           "$package_root/squashfs-root/usr/bin/knowledge-core" health --data-dir "$package_root/data" --json | grep '"ready":true'
           "$package_root/squashfs-root/usr/bin/knowledge-core" health --data-dir "$package_root/data" --json | grep '"schema_version":6'
+      - name: Record Linux package checksums
+        if: runner.os == 'Linux'
+        run: sha256sum src-tauri/target/release/bundle/deb/*.deb src-tauri/target/release/bundle/appimage/*.AppImage > artifacts/linux-packages.sha256
       - name: Bundle Windows installer
         if: runner.os == 'Windows'
         run: npm run tauri -- build --bundles nsis
+      - name: Record Windows installer checksum
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Get-FileHash src-tauri/target/release/bundle/nsis/*.exe -Algorithm SHA256 | ForEach-Object { "$($_.Hash.ToLower())  $($_.Path)" } | Set-Content artifacts/windows-installer.sha256
       - uses: actions/upload-artifact@v4
         if: runner.os == 'Linux'
         with:
@@ -76,8 +86,11 @@ jobs:
           path: |
             src-tauri/target/release/bundle/deb/*.deb
             src-tauri/target/release/bundle/appimage/*.AppImage
+            artifacts/linux-packages.sha256
       - uses: actions/upload-artifact@v4
         if: runner.os == 'Windows'
         with:
           name: desktop-windows-installer
-          path: src-tauri/target/release/bundle/nsis/*.exe
+          path: |
+            src-tauri/target/release/bundle/nsis/*.exe
+            artifacts/windows-installer.sha256
