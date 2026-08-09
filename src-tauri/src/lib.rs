@@ -147,6 +147,25 @@ fn desktop_update_candidate(
         .map_err(str::to_owned)
 }
 
+#[tauri::command]
+fn desktop_query(
+    question: String,
+    sidecar: tauri::State<'_, sidecar::SidecarLaunch>,
+    process: tauri::State<'_, sidecar::CoreProcess>,
+) -> Result<serde_json::Value, String> {
+    if question.trim().is_empty() {
+        return Err("question is required".to_owned());
+    }
+    process
+        .request_with_idempotency(
+            &sidecar,
+            "query.start",
+            serde_json::json!({"question":question,"mode":"strict","profile_version":"local_v1"}),
+            Some(&gateway_key("gui-query")?),
+        )
+        .map_err(str::to_owned)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -158,7 +177,8 @@ pub fn run() {
             desktop_import_text,
             desktop_promote_candidate,
             desktop_reject_candidate,
-            desktop_update_candidate
+            desktop_update_candidate,
+            desktop_query
         ])
         .setup(|app| {
             let resolved = app.path().app_local_data_dir()?;
