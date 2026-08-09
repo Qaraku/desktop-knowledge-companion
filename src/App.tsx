@@ -4,6 +4,7 @@ import { supportedPlatforms } from "./projectScope";
 
 type Candidate = { id: string | number; content: string; state: "proposed" | "editing" | "promoted" | "rejected"; version: number };
 type Knowledge = { id: string | number; content: string; currentRevisionId: string };
+type SourceDocument = { id: string; kind: "text" | "markdown"; content: string; display_name?: string; input_at: string };
 type KnowledgeListResponse = { result?: { value?: Array<{ knowledge: { id: string; current_revision_id: string }; content: string }> } };
 type AgentPrompt = { id: string; topic: string; detail: string; state: "open" };
 type CoreStateSnapshotResponse = { result?: { value?: { pending_candidates?: Candidate[]; pending_prompts?: AgentPrompt[] } } };
@@ -14,8 +15,9 @@ type RevisionReason = "typo" | "format" | "entry_error" | "opinion_change" | "fa
 type Revision = { id: string; content: string };
 
 export function App() {
-  const [source, setSource] = useState("");
+	const [source, setSource] = useState("");
 	const [displayName, setDisplayName] = useState("GUI text");
+	const [sourceKind, setSourceKind] = useState<"text" | "markdown">("text");
   const [candidates, setCandidates] = useState<Candidate[]>([]);
   const [knowledge, setKnowledge] = useState<Knowledge[]>([]);
 	const [revisionReason, setRevisionReason] = useState<RevisionReason>("entry_error");
@@ -26,6 +28,7 @@ export function App() {
 	const [answerView, setAnswerView] = useState<AnswerView>("citations");
 	const [queryMode, setQueryMode] = useState<QueryMode>("strict");
 	const [queryRun, setQueryRun] = useState<QueryRun | null>(null);
+	const [selectedSource, setSelectedSource] = useState<SourceDocument | null>(null);
 	const [coreStatus, setCoreStatus] = useState("桌面 gateway 未连接。");
 
 	async function refreshKnowledge() {
@@ -67,11 +70,12 @@ export function App() {
     const content = source.trim();
     if (!content) return;
     try {
-      const response = await invoke<{ result?: { value?: { candidates?: Array<{ id: string; content: string; version: number }> } } }>("desktop_import_text", { content, displayName });
+      const response = await invoke<{ result?: { value?: { candidates?: Array<{ id: string; content: string; version: number }> } } }>("desktop_import_text", { content, displayName, kind: sourceKind });
       const imported = response.result?.value?.candidates ?? [];
       setCandidates((items) => [...items, ...imported.map((item) => ({ id: item.id, content: item.content, state: "proposed" as const, version: item.version }))]);
-      setSource("");
+		setSource("");
 		setDisplayName("GUI text");
+		setSourceKind("text");
     } catch {
 		await refreshRecoverableWorkspace().catch(() => undefined);
       setCoreStatus("导入失败：核心不可用或拒绝了请求。");
@@ -85,6 +89,7 @@ export function App() {
     try {
       setSource(await file.text());
       setDisplayName(file.name);
+		setSourceKind("markdown");
     } catch {
       setCoreStatus("读取所选 Markdown 文件失败。");
     }
@@ -154,6 +159,17 @@ export function App() {
     }
   }
 
+	async function showKnowledgeSource(knowledgeId: string | number) {
+		try {
+			const response = await invoke<{ result?: { value?: SourceDocument } }>("desktop_knowledge_source", { knowledgeId: String(knowledgeId) });
+			const source = response.result?.value;
+			if (!source) throw new Error("missing source response");
+			setSelectedSource(source);
+		} catch {
+			setCoreStatus("读取原文失败：核心请求被拒绝。");
+		}
+	}
+
   async function resolveAgentPrompt(prompt: AgentPrompt, action: "close" | "ignore" | "defer") {
     try {
       await invoke("desktop_resolve_missing_evidence_prompt", { pendingId: prompt.id, action });
@@ -198,7 +214,7 @@ export function App() {
         <form onSubmit={importText}>
           <label>
             文本或 Markdown
-            <textarea value={source} onChange={(event) => setSource(event.target.value)} placeholder="粘贴需要整理的内容" />
+			<textarea value={source} onChange={(event) => { setSource(event.target.value); setSourceKind("text"); }} placeholder="粘贴需要整理的内容" />
           </label>
           <label>
             选择 Markdown 文件
@@ -230,7 +246,8 @@ export function App() {
 				<option value="correction">修正</option>
 			</select>
 		</label>
-        {knowledge.length === 0 ? <p>尚无已确认知识。</p> : knowledge.map((item) => <article key={item.id} className="card"><textarea aria-label="正式知识内容" value={item.content} onChange={(event) => updateKnowledge(item.id, event.target.value)} onBlur={(event) => void saveKnowledge(item, event.target.value)} /></article>)}
+		{knowledge.length === 0 ? <p>尚无已确认知识。</p> : knowledge.map((item) => <article key={item.id} className="card"><textarea aria-label="正式知识内容" value={item.content} onChange={(event) => updateKnowledge(item.id, event.target.value)} onBlur={(event) => void saveKnowledge(item, event.target.value)} /><p><button type="button" onClick={() => void showKnowledgeSource(item.id)}>查看原文</button></p></article>)}
+		{selectedSource && <article className="card" aria-label="原文"><h3>原文：{selectedSource.display_name || selectedSource.kind}</h3><pre>{selectedSource.content}</pre><button type="button" onClick={() => setSelectedSource(null)}>关闭原文</button></article>}
       </section>
       <section aria-labelledby="query-title">
         <h2 id="query-title">个人知识问答</h2>

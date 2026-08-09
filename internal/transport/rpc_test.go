@@ -226,6 +226,13 @@ func TestServerLinksAndReadsKnowledgeConflicts(t *testing.T) {
 	if value.Knowledge.State != "conflicted" || len(value.Relations) != 1 || value.Relations[0].ToKnowledgeID != second.ID {
 		t.Fatalf("knowledge detail: %#v", value)
 	}
+	source, err := server.call(context.Background(), request{Method: "knowledge.source", Params: json.RawMessage(`{"knowledge_id":"` + first.ID + `"}`)})
+	if err != nil {
+		t.Fatalf("get knowledge source: %v", err)
+	}
+	if value := source.(domain.SourceDocument); value.Content != "First" {
+		t.Fatalf("knowledge source: %#v", value)
+	}
 }
 
 func TestServerDispatchesKnowledgeRevision(t *testing.T) {

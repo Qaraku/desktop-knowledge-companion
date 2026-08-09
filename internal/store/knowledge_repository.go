@@ -139,6 +139,26 @@ type KnowledgeDetail struct {
 	Relations []domain.KnowledgeRelation `json:"relations"`
 }
 
+func (store *Store) GetKnowledgeSource(ctx context.Context, knowledgeID string) (domain.SourceDocument, error) {
+	var source domain.SourceDocument
+	var inputAt string
+	err := store.db.QueryRowContext(ctx, `SELECT s.id, s.kind, s.content, COALESCE(s.display_name, ''), s.input_at
+		FROM candidate_items c
+		JOIN ingestions i ON i.id = c.ingestion_id
+		JOIN source_documents s ON s.id = i.source_id
+		WHERE c.promoted_knowledge_id = ?`, knowledgeID).Scan(&source.ID, &source.Kind, &source.Content, &source.DisplayName, &inputAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return domain.SourceDocument{}, ErrNotFound
+	}
+	if err != nil {
+		return domain.SourceDocument{}, fmt.Errorf("get knowledge source: %w", err)
+	}
+	if source.InputAt, err = time.Parse(time.RFC3339Nano, inputAt); err != nil {
+		return domain.SourceDocument{}, fmt.Errorf("parse source input time: %w", err)
+	}
+	return source, nil
+}
+
 func (store *Store) ListKnowledge(ctx context.Context) ([]KnowledgeSummary, error) {
 	rows, err := store.db.QueryContext(ctx, `SELECT k.id, k.state, k.current_revision_id, k.created_at, r.content FROM knowledge_items k JOIN knowledge_revisions r ON r.id = k.current_revision_id ORDER BY k.created_at DESC`)
 	if err != nil {

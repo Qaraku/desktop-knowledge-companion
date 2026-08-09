@@ -23,6 +23,14 @@ type Candidate struct {
 	UpdatedAt           time.Time      `json:"updated_at"`
 }
 
+type SourceDocument struct {
+	ID          string    `json:"id"`
+	Kind        string    `json:"kind"`
+	Content     string    `json:"content"`
+	DisplayName string    `json:"display_name,omitempty"`
+	InputAt     time.Time `json:"input_at"`
+}
+
 type Knowledge struct {
 	ID                string    `json:"id"`
 	State             string    `json:"state"`

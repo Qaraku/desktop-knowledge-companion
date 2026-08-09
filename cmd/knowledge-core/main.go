@@ -24,7 +24,7 @@ func main() {
 
 func run(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: knowledge-core <serve|health|state-snapshot|import|candidate-list|candidate-get|candidate-pending|candidate-update|candidate-reject|candidate-approval|approval-resolve|candidate-promote|knowledge|knowledge-get|knowledge-revise|knowledge-link-conflict|agent-tool-inspect|agent-tool-request-approval|agent-tool-consume-approval|agent-prompt-suggest|agent-prompt-preference-set|agent-pending-list|agent-pending-resolve|query|query-cancel|run> --data-dir <absolute-path> [--json]")
+		return errors.New("usage: knowledge-core <serve|health|state-snapshot|import|candidate-list|candidate-get|candidate-pending|candidate-update|candidate-reject|candidate-approval|approval-resolve|candidate-promote|knowledge|knowledge-get|knowledge-source|knowledge-revise|knowledge-link-conflict|agent-tool-inspect|agent-tool-request-approval|agent-tool-consume-approval|agent-prompt-suggest|agent-prompt-preference-set|agent-pending-list|agent-pending-resolve|query|query-cancel|run> --data-dir <absolute-path> [--json]")
 	}
 	command := args[0]
 	flags := flag.NewFlagSet(command, flag.ContinueOnError)
@@ -78,6 +78,8 @@ func run(args []string) error {
 		content = flags.String("content", "", "replacement knowledge content")
 		reason = flags.String("reason", "", "typo, format, entry_error, opinion_change, fact_update, time_change, or correction")
 	case "knowledge-get":
+		knowledgeID = flags.String("knowledge-id", "", "knowledge identifier")
+	case "knowledge-source":
 		knowledgeID = flags.String("knowledge-id", "", "knowledge identifier")
 	case "knowledge-link-conflict":
 		fromKnowledgeID = flags.String("from-knowledge-id", "", "knowledge identifier that conflicts")
@@ -199,6 +201,12 @@ func run(args []string) error {
 		return writeResult(result, *jsonOutput)
 	case "knowledge-get":
 		result, err := app.NewKnowledgeService(core).GetKnowledge(context.Background(), *knowledgeID)
+		if err != nil {
+			return err
+		}
+		return writeResult(result, *jsonOutput)
+	case "knowledge-source":
+		result, err := app.NewKnowledgeService(core).GetKnowledgeSource(context.Background(), *knowledgeID)
 		if err != nil {
 			return err
 		}

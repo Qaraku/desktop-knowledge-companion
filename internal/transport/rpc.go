@@ -260,6 +260,14 @@ func (server *Server) call(ctx context.Context, item request) (any, error) {
 			return nil, err
 		}
 		return server.knowledge.GetKnowledge(ctx, p.ID)
+	case "knowledge.source":
+		var p struct {
+			KnowledgeID string `json:"knowledge_id"`
+		}
+		if err := json.Unmarshal(item.Params, &p); err != nil {
+			return nil, err
+		}
+		return server.knowledge.GetKnowledgeSource(ctx, p.KnowledgeID)
 	case "knowledge.revise":
 		var p struct {
 			KnowledgeID        string `json:"knowledge_id"`

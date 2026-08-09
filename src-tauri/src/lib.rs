@@ -65,12 +65,14 @@ fn desktop_pending_candidate_list(
 fn desktop_import_text(
     content: String,
     display_name: Option<String>,
+    kind: Option<String>,
     sidecar: tauri::State<'_, sidecar::SidecarLaunch>,
     process: tauri::State<'_, sidecar::CoreProcess>,
 ) -> Result<serde_json::Value, String> {
     if content.trim().is_empty() {
         return Err("content is required".to_owned());
     }
+    let kind = import_kind(kind)?;
     let key = format!(
         "gui-import-{}",
         SystemTime::now()
@@ -78,7 +80,15 @@ fn desktop_import_text(
             .map_err(|_| "clock unavailable".to_owned())?
             .as_nanos()
     );
-    process.request_with_idempotency(&sidecar, "import.create", serde_json::json!({"kind":"text","content":content,"display_name":display_name.unwrap_or_default()}), Some(&key)).map_err(str::to_owned)
+    process.request_with_idempotency(&sidecar, "import.create", serde_json::json!({"kind":kind,"content":content,"display_name":display_name.unwrap_or_default()}), Some(&key)).map_err(str::to_owned)
+}
+
+fn import_kind(kind: Option<String>) -> Result<String, String> {
+    let kind = kind.unwrap_or_else(|| "text".to_owned());
+    match kind.as_str() {
+        "text" | "markdown" => Ok(kind),
+        _ => Err("invalid import kind".to_owned()),
+    }
 }
 
 fn gateway_key(prefix: &str) -> Result<String, String> {
@@ -184,6 +194,21 @@ fn desktop_query(
             "query.start",
             serde_json::json!({"question":question,"mode":mode,"profile_version":"local_v1"}),
             Some(&gateway_key("gui-query")?),
+        )
+        .map_err(str::to_owned)
+}
+
+#[tauri::command]
+fn desktop_knowledge_source(
+    knowledge_id: String,
+    sidecar: tauri::State<'_, sidecar::SidecarLaunch>,
+    process: tauri::State<'_, sidecar::CoreProcess>,
+) -> Result<serde_json::Value, String> {
+    process
+        .request(
+            &sidecar,
+            "knowledge.source",
+            serde_json::json!({"knowledge_id":knowledge_id}),
         )
         .map_err(str::to_owned)
 }
@@ -300,6 +325,7 @@ pub fn run() {
             desktop_reject_candidate,
             desktop_update_candidate,
             desktop_query,
+            desktop_knowledge_source,
             desktop_revise_knowledge,
             desktop_agent_pending_list,
             desktop_suggest_missing_evidence,
@@ -334,5 +360,15 @@ mod tests {
             Ok("clarify")
         );
         assert!(query_mode(Some("unknown".to_owned())).is_err());
+    }
+
+    #[test]
+    fn import_kind_defaults_and_rejects_unknown_values() {
+        assert_eq!(super::import_kind(None).as_deref(), Ok("text"));
+        assert_eq!(
+            super::import_kind(Some("markdown".to_owned())).as_deref(),
+            Ok("markdown")
+        );
+        assert!(super::import_kind(Some("pdf".to_owned())).is_err());
     }
 }

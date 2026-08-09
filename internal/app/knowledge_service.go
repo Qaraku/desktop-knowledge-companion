@@ -63,6 +63,10 @@ func (service *KnowledgeService) ListKnowledge(ctx context.Context) ([]store.Kno
 	return service.store.ListKnowledge(ctx)
 }
 
+func (service *KnowledgeService) GetKnowledgeSource(ctx context.Context, knowledgeID string) (domain.SourceDocument, error) {
+	return service.store.GetKnowledgeSource(ctx, knowledgeID)
+}
+
 func (service *KnowledgeService) GetKnowledge(ctx context.Context, id string) (store.KnowledgeDetail, error) {
 	return service.store.GetKnowledge(ctx, id)
 }

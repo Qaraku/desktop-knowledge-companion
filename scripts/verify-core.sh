@@ -33,6 +33,7 @@ knowledge_id=$(printf '%s' "$promoted" | sed -n 's/.*"knowledge":{"id":"\([^"]*\
 revision_id=$(printf '%s' "$promoted" | sed -n 's/.*"revision":{"id":"\([^"]*\)".*/\1/p')
 "$binary" knowledge-revise --data-dir "$data_dir/state" --knowledge-id "$knowledge_id" --expected-revision-id "$revision_id" --content 'Go agent evidence corrected' --reason fact_update --json | grep -q '"parent_revision_id"'
 "$binary" knowledge-get --data-dir "$data_dir/state" --knowledge-id "$knowledge_id" --json | grep -q '"revisions"'
+"$binary" knowledge-source --data-dir "$data_dir/state" --knowledge-id "$knowledge_id" --json | grep -q 'Go agent evidence'
 "$binary" knowledge --data-dir "$data_dir/state" --json | grep -q 'Go agent evidence corrected'
 rejected_import=$("$binary" import --data-dir "$data_dir/state" --kind text --content 'Rejected candidate' --idempotency-key verify-reject --json)
 rejected_id=$(printf '%s' "$rejected_import" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
