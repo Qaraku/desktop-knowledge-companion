@@ -1,7 +1,13 @@
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::Mutex;
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Mutex,
+};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+static REQUEST_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug)]
 pub(crate) struct SidecarLaunch {
@@ -81,7 +87,8 @@ impl CoreProcess {
         params: serde_json::Value,
         idempotency_key: Option<&str>,
     ) -> Result<serde_json::Value, &'static str> {
-        let mut meta = serde_json::json!({"protocol_version":1,"request_id":"0198c787-8bf0-7afe-8c7d-9a41c6671c23","caller":"gateway"});
+        let mut meta =
+            serde_json::json!({"protocol_version":1,"request_id":request_id()?,"caller":"gateway"});
         if let Some(key) = idempotency_key {
             meta["idempotency_key"] = serde_json::Value::String(key.to_owned());
         }
@@ -93,12 +100,6 @@ impl CoreProcess {
             Ok(response) => Ok(response),
             Err(_) => {
                 self.reset()?;
-                if idempotency_key.is_some() {
-                    self.start(launch)?;
-                    return Err(
-                        "core restarted after an interrupted write; refresh state before retrying",
-                    );
-                }
                 self.request_once(launch, &request)
             }
         }
@@ -144,6 +145,22 @@ impl CoreProcess {
         }
         Ok(())
     }
+}
+
+fn request_id() -> Result<String, &'static str> {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| "clock unavailable")?
+        .as_nanos();
+    let sequence = REQUEST_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    Ok(format!(
+        "{:08x}-{:04x}-7{:03x}-8{:03x}-{:012x}",
+        (nanos >> 64) as u32,
+        (nanos >> 48) as u16,
+        (nanos >> 36) as u16 & 0x0fff,
+        (nanos >> 24) as u16 & 0x0fff,
+        ((nanos as u64) ^ sequence) & 0x0000_ffff_ffff_ffff,
+    ))
 }
 
 fn sidecar_file_name() -> &'static str {
@@ -223,7 +240,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn does_not_replay_interrupted_write_requests() {
+    fn retries_interrupted_write_requests_with_same_idempotency_key() {
         use std::fs;
         use std::os::unix::fs::PermissionsExt;
 
@@ -234,24 +251,74 @@ mod tests {
         let executable = binaries.join("knowledge-core");
         fs::write(
             &executable,
-            "#!/bin/sh\nstate=\"$0.state\"\nread line\nprintf x >> \"$state\"\nexit 1\n",
+            "#!/bin/sh\nstate=\"$0.state\"\nread line\nprintf '%s\\n' \"$line\" >> \"$state\"\nif [ \"$(wc -l < \"$state\")\" -eq 1 ]; then\n  exit 1\nfi\nprintf '%s\\n' '{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"value\":{\"ready\":true}}}'\n",
         )
         .unwrap();
         fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
         let launch = SidecarLaunch::new(root.clone(), root.join("data")).unwrap();
         let process = CoreProcess::default();
-        assert_eq!(
-            process.request_with_idempotency(
+        let value = process
+            .request_with_idempotency(
                 &launch,
                 "import.create",
                 serde_json::json!({}),
-                Some("write-key")
-            ),
-            Err("core restarted after an interrupted write; refresh state before retrying")
-        );
+                Some("write-key"),
+            )
+            .unwrap();
+        assert_eq!(value["result"]["value"]["ready"], true);
+        let requests: Vec<serde_json::Value> =
+            fs::read_to_string(format!("{}.state", executable.display()))
+                .unwrap()
+                .lines()
+                .map(serde_json::from_str)
+                .collect::<Result<_, _>>()
+                .unwrap();
+        assert_eq!(requests.len(), 2);
+        assert!(requests
+            .iter()
+            .all(|item| item["meta"]["idempotency_key"] == "write-key"));
         assert_eq!(
-            fs::read_to_string(format!("{}.state", executable.display())).unwrap(),
-            "x"
+            requests[0]["meta"]["request_id"],
+            requests[1]["meta"]["request_id"]
+        );
+        process.reset().unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn assigns_distinct_request_ids_to_separate_calls() {
+        use std::fs;
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = std::env::temp_dir().join(format!(
+            "knowledge-sidecar-request-id-{}",
+            std::process::id()
+        ));
+        let binaries = root.join("binaries");
+        fs::create_dir_all(&binaries).unwrap();
+        let executable = binaries.join("knowledge-core");
+        fs::write(
+            &executable,
+            "#!/bin/sh\nstate=\"$0.state\"\nwhile read line; do\n  printf '%s\\n' \"$line\" >> \"$state\"\n  printf '%s\\n' '{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"value\":{\"ready\":true}}}'\ndone\n",
+        )
+        .unwrap();
+        fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
+        let launch = SidecarLaunch::new(root.clone(), root.join("data")).unwrap();
+        let process = CoreProcess::default();
+        process.health(&launch).unwrap();
+        process.health(&launch).unwrap();
+        let requests: Vec<serde_json::Value> =
+            fs::read_to_string(format!("{}.state", executable.display()))
+                .unwrap()
+                .lines()
+                .map(serde_json::from_str)
+                .collect::<Result<_, _>>()
+                .unwrap();
+        assert_eq!(requests.len(), 2);
+        assert_ne!(
+            requests[0]["meta"]["request_id"],
+            requests[1]["meta"]["request_id"]
         );
         process.reset().unwrap();
         fs::remove_dir_all(root).unwrap();
