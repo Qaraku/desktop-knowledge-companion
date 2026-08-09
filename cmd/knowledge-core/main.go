@@ -22,14 +22,14 @@ func main() {
 
 func run(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: knowledge-core <serve|health|import|query> --data-dir <absolute-path> [--json]")
+		return errors.New("usage: knowledge-core <serve|health|import|query|run> --data-dir <absolute-path> [--json]")
 	}
 	command := args[0]
 	flags := flag.NewFlagSet(command, flag.ContinueOnError)
 	flags.SetOutput(os.Stderr)
 	dataDir := flags.String("data-dir", "", "absolute knowledge data directory")
 	jsonOutput := flags.Bool("json", false, "write a JSON result")
-	var content, kind, displayName, idempotencyKey, question, mode, profile *string
+	var content, kind, displayName, idempotencyKey, question, mode, profile, runID *string
 	switch command {
 	case "import":
 		content = flags.String("content", "", "text or Markdown content")
@@ -40,6 +40,8 @@ func run(args []string) error {
 		question = flags.String("question", "", "question to answer")
 		mode = flags.String("mode", "strict", "strict, augment, or clarify")
 		profile = flags.String("profile-version", "local_v1", "query profile version")
+	case "run":
+		runID = flags.String("run-id", "", "query run identifier")
 	}
 	if err := flags.Parse(args[1:]); err != nil {
 		return err
@@ -69,6 +71,12 @@ func run(args []string) error {
 		return writeResult(result, *jsonOutput)
 	case "query":
 		result, err := app.NewQueryService(core).Ask(context.Background(), *question, *mode, *profile)
+		if err != nil {
+			return err
+		}
+		return writeResult(result, *jsonOutput)
+	case "run":
+		result, err := app.NewQueryService(core).GetRun(context.Background(), *runID)
 		if err != nil {
 			return err
 		}
