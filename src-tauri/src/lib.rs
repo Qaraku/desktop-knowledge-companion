@@ -30,13 +30,24 @@ fn desktop_core_start(
     process.health(&sidecar).map_err(str::to_owned)
 }
 
+#[tauri::command]
+fn desktop_knowledge_list(
+    sidecar: tauri::State<'_, sidecar::SidecarLaunch>,
+    process: tauri::State<'_, sidecar::CoreProcess>,
+) -> Result<serde_json::Value, String> {
+    process
+        .request(&sidecar, "knowledge.list", serde_json::json!({}))
+        .map_err(str::to_owned)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             desktop_core_status,
-            desktop_core_start
+            desktop_core_start,
+            desktop_knowledge_list
         ])
         .setup(|app| {
             let resolved = app.path().app_local_data_dir()?;
