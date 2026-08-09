@@ -62,6 +62,15 @@ func (service *Service) SuggestPrompt(ctx context.Context, topic, detail string)
 			return PromptSuggestion{Suppressed: true, Reason: "deferred"}, nil
 		}
 	}
+	pending, err := service.store.ListPendingItems(ctx)
+	if err != nil {
+		return PromptSuggestion{}, err
+	}
+	for _, item := range pending {
+		if item.Topic == topic {
+			return PromptSuggestion{PendingItem: item}, nil
+		}
+	}
 	item, err := service.store.CreatePendingItem(ctx, topic, detail)
 	if err != nil {
 		return PromptSuggestion{}, err

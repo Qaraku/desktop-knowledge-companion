@@ -132,6 +132,10 @@ func TestPromptSuggestionsRespectDeferredAndIgnoredPreferences(t *testing.T) {
 	if err != nil || first.PendingItem.State != "open" {
 		t.Fatalf("first suggestion = %#v, %v", first, err)
 	}
+	repeated, err := service.SuggestPrompt(context.Background(), "missing-evidence", "Import relevant material")
+	if err != nil || repeated.PendingItem.ID != first.PendingItem.ID {
+		t.Fatalf("repeated suggestion = %#v, %v", repeated, err)
+	}
 	if err := service.ResolvePendingPrompt(context.Background(), first.PendingItem.ID, "closed"); err != nil {
 		t.Fatalf("close prompt: %v", err)
 	}
