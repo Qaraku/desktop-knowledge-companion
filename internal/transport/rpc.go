@@ -137,6 +137,8 @@ func (server *Server) call(ctx context.Context, item request) (any, error) {
 			return nil, err
 		}
 		return server.store.ListCandidates(ctx, p.IngestionID)
+	case "candidate.pending.list":
+		return server.knowledge.ListPendingCandidates(ctx)
 	case "candidate.update":
 		var p struct {
 			ID              string
