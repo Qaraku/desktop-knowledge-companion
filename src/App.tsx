@@ -5,6 +5,7 @@ import { supportedPlatforms } from "./projectScope";
 type Candidate = { id: string | number; content: string; state: "proposed" | "editing" | "promoted" | "rejected"; version: number };
 type Knowledge = { id: string | number; content: string };
 type KnowledgeListResponse = { result?: { value?: Array<{ knowledge: { id: string }; content: string }> } };
+type PendingCandidateResponse = { result?: { value?: Candidate[] } };
 type QueryRun = { answer?: string; refusal_reason?: string; citations?: Array<{ excerpt: string }> };
 
 export function App() {
@@ -17,6 +18,16 @@ export function App() {
 	const [citations, setCitations] = useState<string[]>([]);
 	const [coreStatus, setCoreStatus] = useState("桌面 gateway 未连接。");
 
+	async function refreshKnowledge() {
+		const response = await invoke<KnowledgeListResponse>("desktop_knowledge_list");
+		setKnowledge((response.result?.value ?? []).map((item) => ({ id: item.knowledge.id, content: item.content })));
+	}
+
+	async function refreshPendingCandidates() {
+		const response = await invoke<PendingCandidateResponse>("desktop_pending_candidate_list");
+		setCandidates(response.result?.value ?? []);
+	}
+
 	useEffect(() => {
 		async function connectCore() {
 			try {
@@ -26,9 +37,7 @@ export function App() {
 					return;
 				}
 				await invoke("desktop_core_start");
-				const response = await invoke<KnowledgeListResponse>("desktop_knowledge_list");
-				const entries = response.result?.value ?? [];
-				setKnowledge(entries.map((item) => ({ id: item.knowledge.id, content: item.content })));
+				await Promise.all([refreshKnowledge(), refreshPendingCandidates()]);
 				setCoreStatus("Go 核心已由桌面 gateway 启动。");
 			} catch {
 				setCoreStatus("浏览器预览模式：未连接桌面 gateway。" );
@@ -49,10 +58,11 @@ export function App() {
     try {
       const response = await invoke<{ result?: { value?: { candidates?: Array<{ id: string; content: string; version: number }> } } }>("desktop_import_text", { content, displayName });
       const imported = response.result?.value?.candidates ?? [];
-      setCandidates(imported.map((item) => ({ id: item.id, content: item.content, state: "proposed", version: item.version })));
+      setCandidates((items) => [...items, ...imported.map((item) => ({ id: item.id, content: item.content, state: "proposed" as const, version: item.version }))]);
       setSource("");
 		setDisplayName("GUI text");
     } catch {
+		await refreshPendingCandidates().catch(() => undefined);
       setCoreStatus("导入失败：核心不可用或拒绝了请求。");
     }
   }
@@ -93,10 +103,9 @@ export function App() {
   async function promote(candidate: Candidate) {
     try {
       await invoke("desktop_promote_candidate", { candidateId: String(candidate.id) });
-      const response = await invoke<KnowledgeListResponse>("desktop_knowledge_list");
-      setKnowledge((response.result?.value ?? []).map((item) => ({ id: item.knowledge.id, content: item.content })));
-      setCandidates((items) => items.map((item) => (item.id === candidate.id ? { ...item, state: "promoted" } : item)));
+      await Promise.all([refreshKnowledge(), refreshPendingCandidates()]);
     } catch {
+		await Promise.all([refreshKnowledge().catch(() => undefined), refreshPendingCandidates().catch(() => undefined)]);
       setCoreStatus("确认入库失败：审批或核心请求被拒绝。");
     }
   }
@@ -104,8 +113,9 @@ export function App() {
   async function reject(candidate: Candidate) {
     try {
       await invoke("desktop_reject_candidate", { candidateId: String(candidate.id), expectedVersion: candidate.version });
-      setCandidates((items) => items.map((item) => (item.id === candidate.id ? { ...item, state: "rejected", version: item.version + 1 } : item)));
+      await refreshPendingCandidates();
     } catch {
+		await refreshPendingCandidates().catch(() => undefined);
       setCoreStatus("拒绝候选失败：候选已变更或核心请求被拒绝。");
     }
   }
