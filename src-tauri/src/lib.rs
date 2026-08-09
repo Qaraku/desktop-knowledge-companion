@@ -42,6 +42,16 @@ fn desktop_knowledge_list(
 }
 
 #[tauri::command]
+fn desktop_pending_candidate_list(
+    sidecar: tauri::State<'_, sidecar::SidecarLaunch>,
+    process: tauri::State<'_, sidecar::CoreProcess>,
+) -> Result<serde_json::Value, String> {
+    process
+        .request(&sidecar, "candidate.pending.list", serde_json::json!({}))
+        .map_err(str::to_owned)
+}
+
+#[tauri::command]
 fn desktop_import_text(
     content: String,
     display_name: Option<String>,
@@ -174,6 +184,7 @@ pub fn run() {
             desktop_core_status,
             desktop_core_start,
             desktop_knowledge_list,
+            desktop_pending_candidate_list,
             desktop_import_text,
             desktop_promote_candidate,
             desktop_reject_candidate,
