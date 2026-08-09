@@ -176,6 +176,28 @@ fn desktop_query(
         .map_err(str::to_owned)
 }
 
+#[tauri::command]
+fn desktop_revise_knowledge(
+    knowledge_id: String,
+    expected_revision_id: String,
+    content: String,
+    reason: String,
+    sidecar: tauri::State<'_, sidecar::SidecarLaunch>,
+    process: tauri::State<'_, sidecar::CoreProcess>,
+) -> Result<serde_json::Value, String> {
+    if content.trim().is_empty() || reason.trim().is_empty() {
+        return Err("revision content and reason are required".to_owned());
+    }
+    process
+        .request_with_idempotency(
+            &sidecar,
+            "knowledge.revise",
+            serde_json::json!({"knowledge_id":knowledge_id,"expected_revision_id":expected_revision_id,"content":content,"reason":reason}),
+            Some(&gateway_key("gui-knowledge-revise")?),
+        )
+        .map_err(str::to_owned)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -189,7 +211,8 @@ pub fn run() {
             desktop_promote_candidate,
             desktop_reject_candidate,
             desktop_update_candidate,
-            desktop_query
+            desktop_query,
+            desktop_revise_knowledge
         ])
         .setup(|app| {
             let resolved = app.path().app_local_data_dir()?;
