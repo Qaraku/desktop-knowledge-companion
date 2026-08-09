@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"time"
 
 	"desktop-knowledge-companion/internal/store"
 )
@@ -9,6 +10,18 @@ import (
 type Service struct {
 	registry *Registry
 	store    *store.Store
+}
+
+func (service *Service) RequestHighRiskApproval(ctx context.Context, toolName, caller, parameters string) (store.Approval, error) {
+	tool, exists := service.registry.tools[toolName]
+	if !exists || (tool.Risk != ConfirmedWrite && tool.Risk != Destructive) {
+		return store.Approval{}, store.ErrInvalidState
+	}
+	return service.store.RequestToolApproval(ctx, toolName, caller, parameters, time.Now().UTC().Add(5*time.Minute))
+}
+
+func (service *Service) ConsumeHighRiskApproval(ctx context.Context, toolName, caller, parameters, token string) error {
+	return service.store.ConsumeToolApproval(ctx, toolName, caller, parameters, token)
 }
 
 func NewService(registry *Registry, storage *store.Store) *Service {

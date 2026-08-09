@@ -48,3 +48,33 @@ func TestServicePersistsDeniedAndApprovalRequiredAudit(t *testing.T) {
 		t.Fatalf("audit count=%d err=%v", count, err)
 	}
 }
+
+func TestHighRiskToolApprovalBindsParametersAndIsSingleUse(t *testing.T) {
+	storage, err := store.Open(context.Background(), t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer storage.Close()
+	registry, err := NewRegistry([]Tool{{Name: "promote", Risk: ConfirmedWrite}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := NewService(registry, storage)
+	approval, err := service.RequestHighRiskApproval(context.Background(), "promote", "agent", `{"candidate":"a"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := storage.ResolveApproval(context.Background(), approval.ID, "agent", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.ConsumeHighRiskApproval(context.Background(), "promote", "agent", `{"candidate":"b"}`, resolved.Token); err == nil {
+		t.Fatal("parameter replacement must be rejected")
+	}
+	if err := service.ConsumeHighRiskApproval(context.Background(), "promote", "agent", `{"candidate":"a"}`, resolved.Token); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.ConsumeHighRiskApproval(context.Background(), "promote", "agent", `{"candidate":"a"}`, resolved.Token); err == nil {
+		t.Fatal("approval replay must be rejected")
+	}
+}

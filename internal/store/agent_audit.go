@@ -10,6 +10,35 @@ import (
 	"desktop-knowledge-companion/internal/domain"
 )
 
+func (store *Store) RequestToolApproval(ctx context.Context, toolName, caller, parameters string, expiresAt time.Time) (Approval, error) {
+	if toolName == "" || caller == "" || !expiresAt.After(time.Now().UTC()) {
+		return Approval{}, fmt.Errorf("tool, caller, and future expiry are required")
+	}
+	id, err := domain.NewID(time.Now().UTC())
+	if err != nil {
+		return Approval{}, err
+	}
+	action := "agent.tool.execute"
+	approval := Approval{ID: id, Action: action, TargetID: toolName, State: "pending", ExpiresAt: expiresAt.UTC()}
+	_, err = store.db.ExecContext(ctx, `INSERT INTO approval_requests(id, action, target_id, parameter_hash, caller, state, expires_at, created_at) VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)`, id, action, toolName, parameterHash(parameters), caller, approval.ExpiresAt.Format(time.RFC3339Nano), time.Now().UTC().Format(time.RFC3339Nano))
+	if err != nil {
+		return Approval{}, fmt.Errorf("create tool approval: %w", err)
+	}
+	return approval, nil
+}
+
+func (store *Store) ConsumeToolApproval(ctx context.Context, toolName, caller, parameters, token string) error {
+	result, err := store.db.ExecContext(ctx, `UPDATE approval_requests SET state = 'consumed' WHERE action = 'agent.tool.execute' AND target_id = ? AND parameter_hash = ? AND caller = ? AND approval_token = ? AND state = 'approved' AND expires_at > ?`, toolName, parameterHash(parameters), caller, token, time.Now().UTC().Format(time.RFC3339Nano))
+	if err != nil {
+		return fmt.Errorf("consume tool approval: %w", err)
+	}
+	count, _ := result.RowsAffected()
+	if count != 1 {
+		return ErrApprovalInvalid
+	}
+	return nil
+}
+
 type ToolAuditEvent struct {
 	ID        string    `json:"id"`
 	ToolName  string    `json:"tool_name"`
@@ -44,4 +73,9 @@ func (store *Store) SetPromptPreference(ctx context.Context, topic, state string
 	}
 	_, err := store.db.ExecContext(ctx, `INSERT INTO prompt_preferences(topic, state, deferred_until, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(topic) DO UPDATE SET state = excluded.state, deferred_until = excluded.deferred_until, updated_at = excluded.updated_at`, topic, state, until, time.Now().UTC().Format(time.RFC3339Nano))
 	return err
+}
+
+func parameterHash(parameters string) string {
+	sum := sha256.Sum256([]byte(parameters))
+	return hex.EncodeToString(sum[:])
 }
