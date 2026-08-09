@@ -251,16 +251,23 @@ func (server *Server) call(ctx context.Context, item request) (any, error) {
 			Topic         string `json:"topic"`
 			State         string `json:"state"`
 			DeferredUntil string `json:"deferred_until"`
+			DeferForSecs  int    `json:"defer_for_seconds"`
 		}
 		if err := json.Unmarshal(item.Params, &p); err != nil {
 			return nil, err
 		}
 		var deferredUntil *time.Time
+		if p.DeferredUntil != "" && p.DeferForSecs > 0 {
+			return nil, fmt.Errorf("only one deferred time may be provided")
+		}
 		if p.DeferredUntil != "" {
 			value, err := time.Parse(time.RFC3339Nano, p.DeferredUntil)
 			if err != nil {
 				return nil, fmt.Errorf("invalid deferred_until: %w", err)
 			}
+			deferredUntil = &value
+		} else if p.State == "deferred" && p.DeferForSecs > 0 {
+			value := time.Now().UTC().Add(time.Duration(p.DeferForSecs) * time.Second)
 			deferredUntil = &value
 		}
 		if err := server.agent.SetPromptPreference(ctx, p.Topic, p.State, deferredUntil); err != nil {

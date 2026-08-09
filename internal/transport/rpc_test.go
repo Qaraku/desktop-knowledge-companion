@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
-	"time"
 
 	"desktop-knowledge-companion/internal/agent"
 	"desktop-knowledge-companion/internal/domain"
@@ -199,12 +198,11 @@ func TestServerExposesAgentPromptLifecycle(t *testing.T) {
 	if err != nil || len(listed.([]store.PendingItem)) != 1 {
 		t.Fatalf("pending prompts = %#v, %v", listed, err)
 	}
-	deferredUntil := time.Now().UTC().Add(time.Hour).Format(time.RFC3339Nano)
 	preference := server.dispatch(context.Background(), request{
 		JSONRPC: "2.0",
 		ID:      json.RawMessage("2"),
 		Method:  "agent.prompt.preference.set",
-		Params:  json.RawMessage(`{"topic":"conflict","state":"deferred","deferred_until":"` + deferredUntil + `"}`),
+		Params:  json.RawMessage(`{"topic":"conflict","state":"deferred","defer_for_seconds":3600}`),
 		Meta:    meta{ProtocolVersion: 1, RequestID: "0198c787-8bf0-7afe-8c7d-9a41c6671c23", Caller: "test", IdempotencyKey: "rpc-agent-preference-1"},
 	})
 	if preference.Error != nil {
