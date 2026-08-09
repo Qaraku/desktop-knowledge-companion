@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strings"
 
+	"desktop-knowledge-companion/internal/agent"
 	"desktop-knowledge-companion/internal/app"
 	"desktop-knowledge-companion/internal/store"
 )
@@ -57,10 +58,11 @@ type Server struct {
 	store     *store.Store
 	knowledge *app.KnowledgeService
 	query     *app.QueryService
+	agent     *agent.Service
 }
 
 func NewServer(core *store.Store) *Server {
-	return &Server{store: core, knowledge: app.NewKnowledgeService(core), query: app.NewQueryService(core)}
+	return &Server{store: core, knowledge: app.NewKnowledgeService(core), query: app.NewQueryService(core), agent: agent.NewService(agent.DefaultRegistry(), core)}
 }
 
 func Serve(ctx context.Context, input io.Reader, output io.Writer, diagnostics io.Writer, server *Server) error {
@@ -198,6 +200,42 @@ func (server *Server) call(ctx context.Context, item request) (any, error) {
 			return nil, err
 		}
 		return server.knowledge.ReviseKnowledge(ctx, p.KnowledgeID, p.ExpectedRevisionID, p.Content, p.Reason)
+	case "agent.tool.inspect":
+		var p struct {
+			Name string `json:"name"`
+		}
+		if err := json.Unmarshal(item.Params, &p); err != nil {
+			return nil, err
+		}
+		return server.agent.InspectTool(p.Name), nil
+	case "agent.tool.request_approval":
+		var p struct {
+			ToolName   string          `json:"tool_name"`
+			Parameters json.RawMessage `json:"parameters"`
+		}
+		if err := json.Unmarshal(item.Params, &p); err != nil || len(p.Parameters) == 0 {
+			if err != nil {
+				return nil, err
+			}
+			return nil, fmt.Errorf("tool parameters are required")
+		}
+		return server.agent.RequestHighRiskApproval(ctx, p.ToolName, item.Meta.Caller, string(p.Parameters))
+	case "agent.tool.consume_approval":
+		var p struct {
+			ToolName   string          `json:"tool_name"`
+			Parameters json.RawMessage `json:"parameters"`
+			Token      string          `json:"token"`
+		}
+		if err := json.Unmarshal(item.Params, &p); err != nil || len(p.Parameters) == 0 {
+			if err != nil {
+				return nil, err
+			}
+			return nil, fmt.Errorf("tool parameters are required")
+		}
+		if err := server.agent.ConsumeHighRiskApproval(ctx, p.ToolName, item.Meta.Caller, string(p.Parameters), p.Token); err != nil {
+			return nil, err
+		}
+		return map[string]bool{"authorized": true}, nil
 	case "query.start":
 		var p struct {
 			Question       string `json:"question"`
@@ -225,7 +263,7 @@ var errMethodNotFound = errors.New("method not found")
 
 func writeMethod(method string) bool {
 	switch method {
-	case "import.create", "candidate.update", "candidate.reject", "candidate.request_approval", "approval.resolve", "candidate.approve", "knowledge.revise", "query.start":
+	case "import.create", "candidate.update", "candidate.reject", "candidate.request_approval", "approval.resolve", "candidate.approve", "knowledge.revise", "agent.tool.request_approval", "agent.tool.consume_approval", "query.start":
 		return true
 	}
 	return false

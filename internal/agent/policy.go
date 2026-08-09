@@ -18,9 +18,9 @@ type Tool struct {
 }
 
 type Decision struct {
-	Allowed          bool
-	ApprovalRequired bool
-	Reason           string
+	Allowed          bool   `json:"allowed"`
+	ApprovalRequired bool   `json:"approval_required"`
+	Reason           string `json:"reason"`
 }
 
 type Registry struct {

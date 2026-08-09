@@ -34,6 +34,12 @@ revision_id=$(printf '%s' "$promoted" | sed -n 's/.*"revision":{"id":"\([^"]*\)"
 rejected_import=$("$binary" import --data-dir "$data_dir/state" --kind text --content 'Rejected candidate' --idempotency-key verify-reject --json)
 rejected_id=$(printf '%s' "$rejected_import" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
 "$binary" candidate-reject --data-dir "$data_dir/state" --candidate-id "$rejected_id" --expected-version 1 --json | grep -q '"state":"rejected"'
+"$binary" agent-tool-inspect --data-dir "$data_dir/state" --tool-name network.search --json | grep -q '"allowed":false'
+agent_approval=$("$binary" agent-tool-request-approval --data-dir "$data_dir/state" --tool-name candidate.promote --parameters '{"candidate_id":"agent-check"}' --json)
+agent_approval_id=$(printf '%s' "$agent_approval" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+agent_resolution=$("$binary" approval-resolve --data-dir "$data_dir/state" --approval-id "$agent_approval_id" --approve --json)
+agent_token=$(printf '%s' "$agent_resolution" | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
+"$binary" agent-tool-consume-approval --data-dir "$data_dir/state" --tool-name candidate.promote --parameters '{ "candidate_id": "agent-check" }' --token "$agent_token" --json | grep -q '"authorized":true'
 query_result=$("$binary" query --data-dir "$data_dir/state" --question 'unmatched query' --mode strict --json)
 printf '%s' "$query_result" | grep -q '"refusal_reason":"no_local_evidence"'
 run_id=$(printf '%s' "$query_result" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')

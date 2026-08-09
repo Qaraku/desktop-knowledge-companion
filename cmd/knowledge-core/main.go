@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 
+	"desktop-knowledge-companion/internal/agent"
 	"desktop-knowledge-companion/internal/app"
 	"desktop-knowledge-companion/internal/store"
 	"desktop-knowledge-companion/internal/transport"
@@ -22,14 +23,14 @@ func main() {
 
 func run(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: knowledge-core <serve|health|import|candidate-list|candidate-pending|candidate-update|candidate-reject|candidate-approval|approval-resolve|candidate-promote|knowledge|knowledge-revise|query|run> --data-dir <absolute-path> [--json]")
+		return errors.New("usage: knowledge-core <serve|health|import|candidate-list|candidate-pending|candidate-update|candidate-reject|candidate-approval|approval-resolve|candidate-promote|knowledge|knowledge-revise|agent-tool-inspect|agent-tool-request-approval|agent-tool-consume-approval|query|run> --data-dir <absolute-path> [--json]")
 	}
 	command := args[0]
 	flags := flag.NewFlagSet(command, flag.ContinueOnError)
 	flags.SetOutput(os.Stderr)
 	dataDir := flags.String("data-dir", "", "absolute knowledge data directory")
 	jsonOutput := flags.Bool("json", false, "write a JSON result")
-	var content, kind, displayName, idempotencyKey, question, mode, profile, runID, ingestionID, candidateID, approvalID, token, caller, knowledgeID, expectedRevisionID, reason *string
+	var content, kind, displayName, idempotencyKey, question, mode, profile, runID, ingestionID, candidateID, approvalID, token, caller, knowledgeID, expectedRevisionID, reason, toolName, parameters *string
 	var expectedVersion *int
 	var approve *bool
 	switch command {
@@ -70,6 +71,17 @@ func run(args []string) error {
 		expectedRevisionID = flags.String("expected-revision-id", "", "current revision identifier")
 		content = flags.String("content", "", "replacement knowledge content")
 		reason = flags.String("reason", "", "typo, format, entry_error, opinion_change, fact_update, time_change, or correction")
+	case "agent-tool-inspect":
+		toolName = flags.String("tool-name", "", "registered Agent tool name")
+	case "agent-tool-request-approval":
+		toolName = flags.String("tool-name", "", "registered high-risk Agent tool name")
+		parameters = flags.String("parameters", "{}", "JSON tool parameters")
+		caller = flags.String("caller", "cli", "approval caller")
+	case "agent-tool-consume-approval":
+		toolName = flags.String("tool-name", "", "registered high-risk Agent tool name")
+		parameters = flags.String("parameters", "{}", "JSON tool parameters")
+		token = flags.String("token", "", "approved single-use token")
+		caller = flags.String("caller", "cli", "approval caller")
 	}
 	if err := flags.Parse(args[1:]); err != nil {
 		return err
@@ -151,6 +163,19 @@ func run(args []string) error {
 			return err
 		}
 		return writeResult(result, *jsonOutput)
+	case "agent-tool-inspect":
+		return writeResult(agent.NewService(agent.DefaultRegistry(), core).InspectTool(*toolName), *jsonOutput)
+	case "agent-tool-request-approval":
+		result, err := agent.NewService(agent.DefaultRegistry(), core).RequestHighRiskApproval(context.Background(), *toolName, *caller, *parameters)
+		if err != nil {
+			return err
+		}
+		return writeResult(result, *jsonOutput)
+	case "agent-tool-consume-approval":
+		if err := agent.NewService(agent.DefaultRegistry(), core).ConsumeHighRiskApproval(context.Background(), *toolName, *caller, *parameters, *token); err != nil {
+			return err
+		}
+		return writeResult(map[string]bool{"authorized": true}, *jsonOutput)
 	case "query":
 		result, err := app.NewQueryService(core).Ask(context.Background(), *question, *mode, *profile)
 		if err != nil {

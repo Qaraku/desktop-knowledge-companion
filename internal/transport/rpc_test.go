@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"desktop-knowledge-companion/internal/agent"
 	"desktop-knowledge-companion/internal/domain"
 	"desktop-knowledge-companion/internal/store"
 )
@@ -122,5 +123,49 @@ func TestServerDispatchesKnowledgeRevision(t *testing.T) {
 	}).Value.(domain.Revision)
 	if value.ParentRevisionID != firstRevision.ID || value.Content != "Corrected" {
 		t.Fatalf("unexpected revision: %#v", value)
+	}
+}
+
+func TestServerExposesAgentToolApproval(t *testing.T) {
+	core, err := store.Open(context.Background(), t.TempDir())
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer core.Close()
+	server := NewServer(core)
+	inspected, err := server.call(context.Background(), request{Method: "agent.tool.inspect", Params: json.RawMessage(`{"name":"network.search"}`)})
+	if err != nil {
+		t.Fatalf("inspect tool: %v", err)
+	}
+	if decision := inspected.(agent.Decision); decision.Allowed {
+		t.Fatalf("unconfigured network tool allowed: %#v", decision)
+	}
+	approvalResponse := server.dispatch(context.Background(), request{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage("1"),
+		Method:  "agent.tool.request_approval",
+		Params:  json.RawMessage(`{"tool_name":"candidate.promote","parameters":{"candidate_id":"one"}}`),
+		Meta:    meta{ProtocolVersion: 1, RequestID: "0198c787-8bf0-7afe-8c7d-9a41c6671c23", Caller: "test", IdempotencyKey: "rpc-agent-approval-1"},
+	})
+	if approvalResponse.Error != nil {
+		t.Fatalf("request approval: %#v", approvalResponse.Error)
+	}
+	approval := approvalResponse.Result.(struct {
+		RequestID string `json:"request_id"`
+		Value     any    `json:"value"`
+	}).Value.(store.Approval)
+	resolved, err := core.ResolveApproval(context.Background(), approval.ID, "test", true)
+	if err != nil {
+		t.Fatalf("resolve approval: %v", err)
+	}
+	consumed := server.dispatch(context.Background(), request{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage("2"),
+		Method:  "agent.tool.consume_approval",
+		Params:  json.RawMessage(`{"tool_name":"candidate.promote","parameters":{ "candidate_id": "one" },"token":"` + resolved.Token + `"}`),
+		Meta:    meta{ProtocolVersion: 1, RequestID: "0198c787-8bf0-7afe-8c7d-9a41c6671c23", Caller: "test", IdempotencyKey: "rpc-agent-consume-1"},
+	})
+	if consumed.Error != nil {
+		t.Fatalf("consume approval: %#v", consumed.Error)
 	}
 }
