@@ -2,7 +2,7 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { supportedPlatforms } from "./projectScope";
 
-type Candidate = { id: number; content: string; state: "proposed" | "promoted" | "rejected" };
+type Candidate = { id: string | number; content: string; state: "proposed" | "promoted" | "rejected" };
 type Knowledge = { id: string | number; content: string };
 type KnowledgeListResponse = { result?: { value?: Array<{ knowledge: { id: string }; content: string }> } };
 
@@ -39,15 +39,21 @@ export function App() {
     [candidates],
   );
 
-  function importText(event: FormEvent) {
+  async function importText(event: FormEvent) {
     event.preventDefault();
     const content = source.trim();
     if (!content) return;
-    setCandidates((items) => [...items, { id: Date.now(), content, state: "proposed" }]);
-    setSource("");
+    try {
+      const response = await invoke<{ result?: { value?: { candidates?: Array<{ id: string; content: string }> } } }>("desktop_import_text", { content, displayName: "GUI text" });
+      const imported = response.result?.value?.candidates ?? [];
+      setCandidates(imported.map((item) => ({ id: item.id, content: item.content, state: "proposed" })));
+      setSource("");
+    } catch {
+      setCoreStatus("导入失败：核心不可用或拒绝了请求。");
+    }
   }
 
-  function updateCandidate(id: number, content: string) {
+  function updateCandidate(id: string | number, content: string) {
     setCandidates((items) => items.map((item) => (item.id === id ? { ...item, content } : item)));
   }
 
@@ -56,7 +62,7 @@ export function App() {
     setKnowledge((items) => [...items, { id: candidate.id, content: candidate.content }]);
   }
 
-  function reject(id: number) {
+  function reject(id: string | number) {
     setCandidates((items) => items.map((item) => (item.id === id ? { ...item, state: "rejected" } : item)));
   }
 
