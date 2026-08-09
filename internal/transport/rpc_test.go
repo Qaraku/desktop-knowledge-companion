@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"desktop-knowledge-companion/internal/domain"
 	"desktop-knowledge-companion/internal/store"
 )
 
@@ -43,5 +44,33 @@ func TestServeReturnsHealthAndProtocolFailure(t *testing.T) {
 	detail, ok := errorBody["data"].(map[string]any)
 	if !ok || detail["code"] != "PROTOCOL_UNSUPPORTED" {
 		t.Fatalf("unexpected protocol error: %#v", unsupported)
+	}
+}
+
+func TestServerDispatchesIdempotentImportAndCandidateRead(t *testing.T) {
+	core, err := store.Open(context.Background(), t.TempDir())
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer core.Close()
+	server := NewServer(core)
+	item := request{JSONRPC: "2.0", ID: json.RawMessage("1"), Method: "import.create", Params: json.RawMessage(`{"kind":"text","content":"Go Agent","display_name":"note"}`), Meta: meta{ProtocolVersion: 1, RequestID: "0198c787-8bf0-7afe-8c7d-9a41c6671c23", Caller: "test", IdempotencyKey: "rpc-import-1"}}
+	response := server.dispatch(context.Background(), item)
+	if response.Error != nil {
+		t.Fatalf("import response: %#v", response.Error)
+	}
+	value := response.Result.(struct {
+		RequestID string `json:"request_id"`
+		Value     any    `json:"value"`
+	}).Value.(store.ImportResult)
+	if len(value.Candidates) != 1 {
+		t.Fatalf("unexpected import result: %#v", value)
+	}
+	result, err := server.call(context.Background(), request{Method: "candidate.list", Params: json.RawMessage(`{"ingestion_id":"` + value.IngestionID + `"}`)})
+	if err != nil {
+		t.Fatalf("candidate list: %v", err)
+	}
+	if candidates := result.([]domain.Candidate); len(candidates) != 1 || candidates[0].Content != "Go Agent" {
+		t.Fatalf("unexpected candidates: %#v", candidates)
 	}
 }
