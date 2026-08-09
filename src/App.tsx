@@ -1,4 +1,5 @@
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { supportedPlatforms } from "./projectScope";
 
 type Candidate = { id: number; content: string; state: "proposed" | "promoted" | "rejected" };
@@ -10,6 +11,13 @@ export function App() {
   const [knowledge, setKnowledge] = useState<Knowledge[]>([]);
   const [question, setQuestion] = useState("");
   const [answer, setAnswer] = useState("尚未查询。");
+	const [coreStatus, setCoreStatus] = useState("桌面 gateway 未连接。");
+
+	useEffect(() => {
+		invoke<{ ready: boolean }>("desktop_core_status")
+			.then((status) => setCoreStatus(status.ready ? "Go 核心就绪。" : "Go 核心构件尚未就绪。"))
+			.catch(() => setCoreStatus("浏览器预览模式：未连接桌面 gateway。"));
+	}, []);
 
   const activeCandidates = useMemo(
     () => candidates.filter((item) => item.state === "proposed"),
@@ -50,6 +58,7 @@ export function App() {
         <p className="eyebrow">Desktop Knowledge Companion</p>
         <h1>本地知识工作区</h1>
         <p>核心运行于 Go sidecar；当前界面调用边界由 Tauri gateway 承担。</p>
+		<p role="status">{coreStatus}</p>
       </header>
       <section aria-labelledby="import-title">
         <h2 id="import-title">导入</h2>
