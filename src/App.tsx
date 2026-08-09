@@ -14,9 +14,20 @@ export function App() {
 	const [coreStatus, setCoreStatus] = useState("桌面 gateway 未连接。");
 
 	useEffect(() => {
-		invoke<{ ready: boolean }>("desktop_core_status")
-			.then((status) => setCoreStatus(status.ready ? "Go 核心就绪。" : "Go 核心构件尚未就绪。"))
-			.catch(() => setCoreStatus("浏览器预览模式：未连接桌面 gateway。"));
+		async function connectCore() {
+			try {
+				const status = await invoke<{ ready: boolean }>("desktop_core_status");
+				if (!status.ready) {
+					setCoreStatus("Go 核心构件尚未就绪。");
+					return;
+				}
+				await invoke("desktop_core_start");
+				setCoreStatus("Go 核心已由桌面 gateway 启动。");
+			} catch {
+				setCoreStatus("浏览器预览模式：未连接桌面 gateway。" );
+			}
+		}
+		void connectCore();
 	}, []);
 
   const activeCandidates = useMemo(
