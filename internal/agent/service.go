@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -12,6 +13,12 @@ import (
 type Service struct {
 	registry *Registry
 	store    *store.Store
+}
+
+type PromptSuggestion struct {
+	PendingItem store.PendingItem `json:"pending_item,omitempty"`
+	Suppressed  bool              `json:"suppressed"`
+	Reason      string            `json:"reason,omitempty"`
 }
 
 func (service *Service) RequestHighRiskApproval(ctx context.Context, toolName, caller, parameters string) (store.Approval, error) {
@@ -40,6 +47,38 @@ func NewService(registry *Registry, storage *store.Store) *Service {
 
 func (service *Service) InspectTool(name string) Decision {
 	return service.registry.Decide(name, false)
+}
+
+func (service *Service) SuggestPrompt(ctx context.Context, topic, detail string) (PromptSuggestion, error) {
+	state, deferredUntil, err := service.store.GetPromptPreference(ctx, topic)
+	if err != nil && !errors.Is(err, store.ErrNotFound) {
+		return PromptSuggestion{}, err
+	}
+	if err == nil {
+		if state == "ignored" || state == "closed" {
+			return PromptSuggestion{Suppressed: true, Reason: state}, nil
+		}
+		if state == "deferred" && deferredUntil != nil && deferredUntil.After(time.Now().UTC()) {
+			return PromptSuggestion{Suppressed: true, Reason: "deferred"}, nil
+		}
+	}
+	item, err := service.store.CreatePendingItem(ctx, topic, detail)
+	if err != nil {
+		return PromptSuggestion{}, err
+	}
+	return PromptSuggestion{PendingItem: item}, nil
+}
+
+func (service *Service) SetPromptPreference(ctx context.Context, topic, state string, deferredUntil *time.Time) error {
+	return service.store.SetPromptPreference(ctx, topic, state, deferredUntil)
+}
+
+func (service *Service) ListPendingPrompts(ctx context.Context) ([]store.PendingItem, error) {
+	return service.store.ListPendingItems(ctx)
+}
+
+func (service *Service) ResolvePendingPrompt(ctx context.Context, id, state string) error {
+	return service.store.ResolvePendingItem(ctx, id, state)
 }
 
 func (service *Service) RequestTool(ctx context.Context, name, parameters string, networkConfigured bool) (Decision, error) {

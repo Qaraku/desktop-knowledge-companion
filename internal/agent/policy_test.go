@@ -120,3 +120,38 @@ func TestHighRiskToolApprovalRejectsInvalidParameters(t *testing.T) {
 		t.Fatal("invalid parameters must be rejected")
 	}
 }
+
+func TestPromptSuggestionsRespectDeferredAndIgnoredPreferences(t *testing.T) {
+	storage, err := store.Open(context.Background(), t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer storage.Close()
+	service := NewService(DefaultRegistry(), storage)
+	first, err := service.SuggestPrompt(context.Background(), "missing-evidence", "Import relevant material")
+	if err != nil || first.PendingItem.State != "open" {
+		t.Fatalf("first suggestion = %#v, %v", first, err)
+	}
+	if err := service.ResolvePendingPrompt(context.Background(), first.PendingItem.ID, "closed"); err != nil {
+		t.Fatalf("close prompt: %v", err)
+	}
+	if err := service.SetPromptPreference(context.Background(), "missing-evidence", "ignored", nil); err != nil {
+		t.Fatalf("ignore preference: %v", err)
+	}
+	suppressed, err := service.SuggestPrompt(context.Background(), "missing-evidence", "Import relevant material")
+	if err != nil || !suppressed.Suppressed || suppressed.Reason != "ignored" {
+		t.Fatalf("ignored suggestion = %#v, %v", suppressed, err)
+	}
+	deferredUntil := time.Now().UTC().Add(time.Hour)
+	if err := service.SetPromptPreference(context.Background(), "conflict", "deferred", &deferredUntil); err != nil {
+		t.Fatalf("defer preference: %v", err)
+	}
+	deferred, err := service.SuggestPrompt(context.Background(), "conflict", "Resolve conflict")
+	if err != nil || !deferred.Suppressed || deferred.Reason != "deferred" {
+		t.Fatalf("deferred suggestion = %#v, %v", deferred, err)
+	}
+	items, err := service.ListPendingPrompts(context.Background())
+	if err != nil || len(items) != 0 {
+		t.Fatalf("open prompts = %#v, %v", items, err)
+	}
+}

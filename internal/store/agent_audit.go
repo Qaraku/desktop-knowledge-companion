@@ -50,6 +50,15 @@ type ToolAuditEvent struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
+type PendingItem struct {
+	ID        string    `json:"id"`
+	Topic     string    `json:"topic"`
+	Detail    string    `json:"detail"`
+	State     string    `json:"state"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
 func (store *Store) RecordToolEvent(ctx context.Context, toolName, riskLevel, state, parameters, detail string) (ToolAuditEvent, error) {
 	now := time.Now().UTC()
 	id, err := domain.NewID(now)
@@ -66,7 +75,7 @@ func (store *Store) RecordToolEvent(ctx context.Context, toolName, riskLevel, st
 }
 
 func (store *Store) SetPromptPreference(ctx context.Context, topic, state string, deferredUntil *time.Time) error {
-	if topic == "" || (state != "ignored" && state != "deferred" && state != "closed") {
+	if topic == "" || (state != "ignored" && state != "deferred" && state != "closed") || (state == "deferred" && deferredUntil == nil) {
 		return fmt.Errorf("invalid prompt preference")
 	}
 	var until any
@@ -95,6 +104,62 @@ func (store *Store) GetPromptPreference(ctx context.Context, topic string) (stri
 		return "", nil, err
 	}
 	return state, &value, nil
+}
+
+func (store *Store) CreatePendingItem(ctx context.Context, topic, detail string) (PendingItem, error) {
+	if topic == "" || detail == "" {
+		return PendingItem{}, fmt.Errorf("pending item topic and detail are required")
+	}
+	now := time.Now().UTC()
+	id, err := domain.NewID(now)
+	if err != nil {
+		return PendingItem{}, err
+	}
+	item := PendingItem{ID: id, Topic: topic, Detail: detail, State: "open", CreatedAt: now, UpdatedAt: now}
+	_, err = store.db.ExecContext(ctx, `INSERT INTO pending_items(id, topic, detail, state, created_at, updated_at) VALUES (?, ?, ?, 'open', ?, ?)`, item.ID, item.Topic, item.Detail, item.CreatedAt.Format(time.RFC3339Nano), item.UpdatedAt.Format(time.RFC3339Nano))
+	if err != nil {
+		return PendingItem{}, fmt.Errorf("create pending item: %w", err)
+	}
+	return item, nil
+}
+
+func (store *Store) ListPendingItems(ctx context.Context) ([]PendingItem, error) {
+	rows, err := store.db.QueryContext(ctx, `SELECT id, topic, detail, state, created_at, updated_at FROM pending_items WHERE state = 'open' ORDER BY created_at DESC`)
+	if err != nil {
+		return nil, fmt.Errorf("list pending items: %w", err)
+	}
+	defer rows.Close()
+	items := make([]PendingItem, 0)
+	for rows.Next() {
+		var item PendingItem
+		var createdAt, updatedAt string
+		if err := rows.Scan(&item.ID, &item.Topic, &item.Detail, &item.State, &createdAt, &updatedAt); err != nil {
+			return nil, fmt.Errorf("scan pending item: %w", err)
+		}
+		if item.CreatedAt, err = time.Parse(time.RFC3339Nano, createdAt); err != nil {
+			return nil, fmt.Errorf("parse pending item creation time: %w", err)
+		}
+		if item.UpdatedAt, err = time.Parse(time.RFC3339Nano, updatedAt); err != nil {
+			return nil, fmt.Errorf("parse pending item update time: %w", err)
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (store *Store) ResolvePendingItem(ctx context.Context, id, state string) error {
+	if state != "ignored" && state != "deferred" && state != "closed" {
+		return fmt.Errorf("invalid pending item state")
+	}
+	result, err := store.db.ExecContext(ctx, `UPDATE pending_items SET state = ?, updated_at = ? WHERE id = ? AND state = 'open'`, state, time.Now().UTC().Format(time.RFC3339Nano), id)
+	if err != nil {
+		return fmt.Errorf("resolve pending item: %w", err)
+	}
+	count, _ := result.RowsAffected()
+	if count == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 func parameterHash(parameters string) string {
