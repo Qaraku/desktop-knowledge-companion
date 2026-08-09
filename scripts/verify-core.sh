@@ -25,8 +25,12 @@ approval=$("$binary" candidate-approval --data-dir "$data_dir/state" --candidate
 approval_id=$(printf '%s' "$approval" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
 resolved=$("$binary" approval-resolve --data-dir "$data_dir/state" --approval-id "$approval_id" --approve --json)
 token=$(printf '%s' "$resolved" | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
-"$binary" candidate-promote --data-dir "$data_dir/state" --candidate-id "$candidate_id" --token "$token" --json | grep -q '"knowledge"'
-"$binary" knowledge --data-dir "$data_dir/state" --json | grep -q 'Go agent evidence revised'
+promoted=$("$binary" candidate-promote --data-dir "$data_dir/state" --candidate-id "$candidate_id" --token "$token" --json)
+printf '%s' "$promoted" | grep -q '"knowledge"'
+knowledge_id=$(printf '%s' "$promoted" | sed -n 's/.*"knowledge":{"id":"\([^"]*\)".*/\1/p')
+revision_id=$(printf '%s' "$promoted" | sed -n 's/.*"revision":{"id":"\([^"]*\)".*/\1/p')
+"$binary" knowledge-revise --data-dir "$data_dir/state" --knowledge-id "$knowledge_id" --expected-revision-id "$revision_id" --content 'Go agent evidence corrected' --reason fact_update --json | grep -q '"parent_revision_id"'
+"$binary" knowledge --data-dir "$data_dir/state" --json | grep -q 'Go agent evidence corrected'
 rejected_import=$("$binary" import --data-dir "$data_dir/state" --kind text --content 'Rejected candidate' --idempotency-key verify-reject --json)
 rejected_id=$(printf '%s' "$rejected_import" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
 "$binary" candidate-reject --data-dir "$data_dir/state" --candidate-id "$rejected_id" --expected-version 1 --json | grep -q '"state":"rejected"'

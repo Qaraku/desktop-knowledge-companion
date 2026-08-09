@@ -187,6 +187,17 @@ func (server *Server) call(ctx context.Context, item request) (any, error) {
 		return map[string]any{"knowledge": knowledge, "revision": revision}, err
 	case "knowledge.list":
 		return server.knowledge.ListKnowledge(ctx)
+	case "knowledge.revise":
+		var p struct {
+			KnowledgeID        string `json:"knowledge_id"`
+			ExpectedRevisionID string `json:"expected_revision_id"`
+			Content            string `json:"content"`
+			Reason             string `json:"reason"`
+		}
+		if err := json.Unmarshal(item.Params, &p); err != nil {
+			return nil, err
+		}
+		return server.knowledge.ReviseKnowledge(ctx, p.KnowledgeID, p.ExpectedRevisionID, p.Content, p.Reason)
 	case "query.start":
 		var p struct {
 			Question       string `json:"question"`
@@ -214,7 +225,7 @@ var errMethodNotFound = errors.New("method not found")
 
 func writeMethod(method string) bool {
 	switch method {
-	case "import.create", "candidate.update", "candidate.reject", "candidate.request_approval", "approval.resolve", "candidate.approve", "query.start":
+	case "import.create", "candidate.update", "candidate.reject", "candidate.request_approval", "approval.resolve", "candidate.approve", "knowledge.revise", "query.start":
 		return true
 	}
 	return false

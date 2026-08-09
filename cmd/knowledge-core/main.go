@@ -22,14 +22,14 @@ func main() {
 
 func run(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: knowledge-core <serve|health|import|candidate-list|candidate-pending|candidate-update|candidate-reject|candidate-approval|approval-resolve|candidate-promote|knowledge|query|run> --data-dir <absolute-path> [--json]")
+		return errors.New("usage: knowledge-core <serve|health|import|candidate-list|candidate-pending|candidate-update|candidate-reject|candidate-approval|approval-resolve|candidate-promote|knowledge|knowledge-revise|query|run> --data-dir <absolute-path> [--json]")
 	}
 	command := args[0]
 	flags := flag.NewFlagSet(command, flag.ContinueOnError)
 	flags.SetOutput(os.Stderr)
 	dataDir := flags.String("data-dir", "", "absolute knowledge data directory")
 	jsonOutput := flags.Bool("json", false, "write a JSON result")
-	var content, kind, displayName, idempotencyKey, question, mode, profile, runID, ingestionID, candidateID, approvalID, token, caller *string
+	var content, kind, displayName, idempotencyKey, question, mode, profile, runID, ingestionID, candidateID, approvalID, token, caller, knowledgeID, expectedRevisionID, reason *string
 	var expectedVersion *int
 	var approve *bool
 	switch command {
@@ -65,6 +65,11 @@ func run(args []string) error {
 		candidateID = flags.String("candidate-id", "", "candidate identifier")
 		token = flags.String("token", "", "approved single-use token")
 		caller = flags.String("caller", "cli", "approval caller")
+	case "knowledge-revise":
+		knowledgeID = flags.String("knowledge-id", "", "knowledge identifier")
+		expectedRevisionID = flags.String("expected-revision-id", "", "current revision identifier")
+		content = flags.String("content", "", "replacement knowledge content")
+		reason = flags.String("reason", "", "typo, format, entry_error, opinion_change, fact_update, time_change, or correction")
 	}
 	if err := flags.Parse(args[1:]); err != nil {
 		return err
@@ -140,6 +145,12 @@ func run(args []string) error {
 			return err
 		}
 		return writeResult(map[string]any{"knowledge": knowledge, "revision": revision}, *jsonOutput)
+	case "knowledge-revise":
+		result, err := app.NewKnowledgeService(core).ReviseKnowledge(context.Background(), *knowledgeID, *expectedRevisionID, *content, *reason)
+		if err != nil {
+			return err
+		}
+		return writeResult(result, *jsonOutput)
 	case "query":
 		result, err := app.NewQueryService(core).Ask(context.Background(), *question, *mode, *profile)
 		if err != nil {

@@ -81,3 +81,46 @@ func TestServerDispatchesIdempotentImportAndCandidateRead(t *testing.T) {
 		t.Fatalf("unexpected pending candidates: %#v", candidates)
 	}
 }
+
+func TestServerDispatchesKnowledgeRevision(t *testing.T) {
+	core, err := store.Open(context.Background(), t.TempDir())
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer core.Close()
+	server := NewServer(core)
+	knowledge := server.knowledge
+	imported, err := knowledge.Import(context.Background(), "text", "Original", "", "rpc-revision-import")
+	if err != nil {
+		t.Fatalf("import: %v", err)
+	}
+	approval, err := knowledge.RequestCandidatePromotion(context.Background(), imported.Candidates[0].ID, "test")
+	if err != nil {
+		t.Fatalf("approval request: %v", err)
+	}
+	resolution, err := knowledge.ResolveApproval(context.Background(), approval.ID, "test", true)
+	if err != nil {
+		t.Fatalf("approval resolution: %v", err)
+	}
+	item, firstRevision, err := knowledge.PromoteCandidate(context.Background(), imported.Candidates[0].ID, resolution.Token, "test")
+	if err != nil {
+		t.Fatalf("promote: %v", err)
+	}
+	response := server.dispatch(context.Background(), request{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage("1"),
+		Method:  "knowledge.revise",
+		Params:  json.RawMessage(`{"knowledge_id":"` + item.ID + `","expected_revision_id":"` + firstRevision.ID + `","content":"Corrected","reason":"fact_update"}`),
+		Meta:    meta{ProtocolVersion: 1, RequestID: "0198c787-8bf0-7afe-8c7d-9a41c6671c23", Caller: "test", IdempotencyKey: "rpc-revision-1"},
+	})
+	if response.Error != nil {
+		t.Fatalf("revision response: %#v", response.Error)
+	}
+	value := response.Result.(struct {
+		RequestID string `json:"request_id"`
+		Value     any    `json:"value"`
+	}).Value.(domain.Revision)
+	if value.ParentRevisionID != firstRevision.ID || value.Content != "Corrected" {
+		t.Fatalf("unexpected revision: %#v", value)
+	}
+}
