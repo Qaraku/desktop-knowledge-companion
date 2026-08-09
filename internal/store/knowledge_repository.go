@@ -1,0 +1,416 @@
+package store
+
+import (
+	"context"
+	"crypto/sha256"
+	"database/sql"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"strings"
+	"time"
+
+	"desktop-knowledge-companion/internal/domain"
+	"desktop-knowledge-companion/internal/organizer"
+)
+
+type ImportResult struct {
+	SourceID    string             `json:"source_id"`
+	IngestionID string             `json:"ingestion_id"`
+	Candidates  []domain.Candidate `json:"candidates"`
+	Replayed    bool               `json:"replayed"`
+}
+
+type Approval struct {
+	ID        string    `json:"id"`
+	Action    string    `json:"action"`
+	TargetID  string    `json:"target_id"`
+	State     string    `json:"state"`
+	ExpiresAt time.Time `json:"expires_at"`
+}
+
+type ApprovalResolution struct {
+	Approval Approval `json:"approval"`
+	Token    string   `json:"token,omitempty"`
+}
+
+func (store *Store) CreateImport(ctx context.Context, kind, content, displayName, idempotencyKey string, candidates []organizer.Candidate) (ImportResult, error) {
+	if strings.TrimSpace(idempotencyKey) == "" {
+		return ImportResult{}, fmt.Errorf("idempotency key is required")
+	}
+	if len(candidates) == 0 {
+		return ImportResult{}, fmt.Errorf("at least one candidate is required")
+	}
+	if result, found, err := store.importByIdempotency(ctx, idempotencyKey); err != nil || found {
+		if err != nil {
+			return ImportResult{}, err
+		}
+		result.Replayed = true
+		return result, nil
+	}
+
+	now := time.Now().UTC()
+	sourceID, err := domain.NewID(now)
+	if err != nil {
+		return ImportResult{}, err
+	}
+	ingestionID, err := domain.NewID(now)
+	if err != nil {
+		return ImportResult{}, err
+	}
+	prepared := make([]domain.Candidate, 0, len(candidates))
+	for _, item := range candidates {
+		id, err := domain.NewID(now)
+		if err != nil {
+			return ImportResult{}, err
+		}
+		prepared = append(prepared, domain.Candidate{ID: id, IngestionID: ingestionID, Ordinal: item.Ordinal, Version: 1, Content: item.Content, TitlePath: item.TitlePath, State: domain.CandidateProposed, UpdatedAt: now})
+	}
+
+	tx, err := store.db.BeginTx(ctx, nil)
+	if err != nil {
+		return ImportResult{}, fmt.Errorf("begin import: %w", err)
+	}
+	defer tx.Rollback()
+	if _, err = tx.ExecContext(ctx, "INSERT INTO source_documents(id, kind, content, content_hash, display_name, input_at) VALUES (?, ?, ?, ?, ?, ?)", sourceID, kind, content, contentHash(content), nullIfEmpty(displayName), now.Format(time.RFC3339Nano)); err != nil {
+		return ImportResult{}, fmt.Errorf("insert source: %w", err)
+	}
+	if _, err = tx.ExecContext(ctx, "INSERT INTO ingestions(id, source_id, idempotency_key, state, created_at) VALUES (?, ?, ?, 'candidates_ready', ?)", ingestionID, sourceID, idempotencyKey, now.Format(time.RFC3339Nano)); err != nil {
+		return ImportResult{}, fmt.Errorf("insert ingestion: %w", err)
+	}
+	for _, item := range prepared {
+		path, marshalErr := json.Marshal(item.TitlePath)
+		if marshalErr != nil {
+			return ImportResult{}, fmt.Errorf("marshal title path: %w", marshalErr)
+		}
+		if _, err = tx.ExecContext(ctx, "INSERT INTO candidate_items(id, ingestion_id, ordinal, version, content, title_path_json, state, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", item.ID, item.IngestionID, item.Ordinal, item.Version, item.Content, path, item.State, now.Format(time.RFC3339Nano)); err != nil {
+			return ImportResult{}, fmt.Errorf("insert candidate: %w", err)
+		}
+	}
+	if err = tx.Commit(); err != nil {
+		return ImportResult{}, fmt.Errorf("commit import: %w", err)
+	}
+	return ImportResult{SourceID: sourceID, IngestionID: ingestionID, Candidates: prepared}, nil
+}
+
+func (store *Store) ListCandidates(ctx context.Context, ingestionID string) ([]domain.Candidate, error) {
+	rows, err := store.db.QueryContext(ctx, `SELECT id, ingestion_id, ordinal, version, content, title_path_json, state, COALESCE(promoted_knowledge_id, ''), updated_at FROM candidate_items WHERE ingestion_id = ? ORDER BY ordinal`, ingestionID)
+	if err != nil {
+		return nil, fmt.Errorf("list candidates: %w", err)
+	}
+	defer rows.Close()
+	var result []domain.Candidate
+	for rows.Next() {
+		item, err := scanCandidate(rows)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, item)
+	}
+	return result, rows.Err()
+}
+
+func (store *Store) GetCandidate(ctx context.Context, id string) (domain.Candidate, error) {
+	row := store.db.QueryRowContext(ctx, `SELECT id, ingestion_id, ordinal, version, content, title_path_json, state, COALESCE(promoted_knowledge_id, ''), updated_at FROM candidate_items WHERE id = ?`, id)
+	item, err := scanCandidate(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return domain.Candidate{}, ErrNotFound
+	}
+	return item, err
+}
+
+func (store *Store) UpdateCandidate(ctx context.Context, id string, expectedVersion int, content string) (domain.Candidate, error) {
+	if strings.TrimSpace(content) == "" {
+		return domain.Candidate{}, fmt.Errorf("candidate content is empty")
+	}
+	result, err := store.db.ExecContext(ctx, `UPDATE candidate_items SET content = ?, version = version + 1, state = 'editing', updated_at = ? WHERE id = ? AND version = ? AND state IN ('proposed', 'editing')`, content, time.Now().UTC().Format(time.RFC3339Nano), id, expectedVersion)
+	if err != nil {
+		return domain.Candidate{}, fmt.Errorf("update candidate: %w", err)
+	}
+	count, _ := result.RowsAffected()
+	if count == 0 {
+		if _, err := store.GetCandidate(ctx, id); errors.Is(err, ErrNotFound) {
+			return domain.Candidate{}, ErrNotFound
+		}
+		return domain.Candidate{}, ErrVersionConflict
+	}
+	return store.GetCandidate(ctx, id)
+}
+
+func (store *Store) RejectCandidate(ctx context.Context, id string, expectedVersion int) (domain.Candidate, error) {
+	result, err := store.db.ExecContext(ctx, `UPDATE candidate_items SET version = version + 1, state = 'rejected', updated_at = ? WHERE id = ? AND version = ? AND state IN ('proposed', 'editing')`, time.Now().UTC().Format(time.RFC3339Nano), id, expectedVersion)
+	if err != nil {
+		return domain.Candidate{}, fmt.Errorf("reject candidate: %w", err)
+	}
+	count, _ := result.RowsAffected()
+	if count == 0 {
+		if _, err := store.GetCandidate(ctx, id); errors.Is(err, ErrNotFound) {
+			return domain.Candidate{}, ErrNotFound
+		}
+		return domain.Candidate{}, ErrInvalidState
+	}
+	return store.GetCandidate(ctx, id)
+}
+
+func (store *Store) RequestCandidateApproval(ctx context.Context, candidateID, caller string, expiresAt time.Time) (Approval, error) {
+	candidate, err := store.GetCandidate(ctx, candidateID)
+	if err != nil {
+		return Approval{}, err
+	}
+	if candidate.State != domain.CandidateProposed && candidate.State != domain.CandidateEditing {
+		return Approval{}, ErrInvalidState
+	}
+	if caller == "" || !expiresAt.After(time.Now().UTC()) {
+		return Approval{}, fmt.Errorf("caller and future expiry are required")
+	}
+	id, err := domain.NewID(time.Now().UTC())
+	if err != nil {
+		return Approval{}, err
+	}
+	approval := Approval{ID: id, Action: "candidate.promote", TargetID: candidateID, State: "pending", ExpiresAt: expiresAt.UTC()}
+	_, err = store.db.ExecContext(ctx, `INSERT INTO approval_requests(id, action, target_id, parameter_hash, caller, state, expires_at, created_at) VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)`, approval.ID, approval.Action, candidateID, actionHash(approval.Action, candidateID), caller, approval.ExpiresAt.Format(time.RFC3339Nano), time.Now().UTC().Format(time.RFC3339Nano))
+	if err != nil {
+		return Approval{}, fmt.Errorf("create approval: %w", err)
+	}
+	return approval, nil
+}
+
+func (store *Store) ResolveApproval(ctx context.Context, approvalID, caller string, approve bool) (ApprovalResolution, error) {
+	approval, err := store.getApproval(ctx, approvalID)
+	if err != nil {
+		return ApprovalResolution{}, err
+	}
+	if approval.State != "pending" || !approval.ExpiresAt.After(time.Now().UTC()) || caller == "" {
+		return ApprovalResolution{}, ErrApprovalInvalid
+	}
+	state, token := "denied", ""
+	if approve {
+		state = "approved"
+		token, err = domain.NewID(time.Now().UTC())
+		if err != nil {
+			return ApprovalResolution{}, err
+		}
+	}
+	result, err := store.db.ExecContext(ctx, `UPDATE approval_requests SET state = ?, approval_token = ? WHERE id = ? AND state = 'pending' AND caller = ? AND expires_at > ?`, state, nullIfEmpty(token), approvalID, caller, time.Now().UTC().Format(time.RFC3339Nano))
+	if err != nil {
+		return ApprovalResolution{}, fmt.Errorf("resolve approval: %w", err)
+	}
+	count, _ := result.RowsAffected()
+	if count != 1 {
+		return ApprovalResolution{}, ErrApprovalInvalid
+	}
+	approval.State = state
+	return ApprovalResolution{Approval: approval, Token: token}, nil
+}
+
+func (store *Store) PromoteCandidate(ctx context.Context, candidateID, approvalToken, caller string) (domain.Knowledge, domain.Revision, error) {
+	tx, err := store.db.BeginTx(ctx, nil)
+	if err != nil {
+		return domain.Knowledge{}, domain.Revision{}, fmt.Errorf("begin candidate promotion: %w", err)
+	}
+	defer tx.Rollback()
+	candidate, err := getCandidateTx(ctx, tx, candidateID)
+	if err != nil {
+		return domain.Knowledge{}, domain.Revision{}, err
+	}
+	if candidate.State == domain.CandidatePromoted {
+		knowledge, revision, err := getPromotedKnowledgeTx(ctx, tx, candidate.PromotedKnowledgeID)
+		return knowledge, revision, err
+	}
+	if candidate.State != domain.CandidateProposed && candidate.State != domain.CandidateEditing {
+		return domain.Knowledge{}, domain.Revision{}, ErrInvalidState
+	}
+	result, err := tx.ExecContext(ctx, `UPDATE approval_requests SET state = 'consumed' WHERE action = 'candidate.promote' AND target_id = ? AND parameter_hash = ? AND caller = ? AND approval_token = ? AND state = 'approved' AND expires_at > ?`, candidateID, actionHash("candidate.promote", candidateID), caller, approvalToken, time.Now().UTC().Format(time.RFC3339Nano))
+	if err != nil {
+		return domain.Knowledge{}, domain.Revision{}, fmt.Errorf("consume approval: %w", err)
+	}
+	count, _ := result.RowsAffected()
+	if count != 1 {
+		return domain.Knowledge{}, domain.Revision{}, ErrApprovalInvalid
+	}
+	now := time.Now().UTC()
+	knowledgeID, err := domain.NewID(now)
+	if err != nil {
+		return domain.Knowledge{}, domain.Revision{}, err
+	}
+	revisionID, err := domain.NewID(now)
+	if err != nil {
+		return domain.Knowledge{}, domain.Revision{}, err
+	}
+	knowledge := domain.Knowledge{ID: knowledgeID, State: "active", CurrentRevisionID: revisionID, CreatedAt: now}
+	revision := domain.Revision{ID: revisionID, KnowledgeID: knowledgeID, Content: candidate.Content, Reason: "candidate_promotion", State: "current", CreatedAt: now}
+	if _, err = tx.ExecContext(ctx, "INSERT INTO knowledge_items(id, state, current_revision_id, created_at) VALUES (?, ?, ?, ?)", knowledge.ID, knowledge.State, knowledge.CurrentRevisionID, now.Format(time.RFC3339Nano)); err != nil {
+		return domain.Knowledge{}, domain.Revision{}, fmt.Errorf("insert knowledge: %w", err)
+	}
+	if _, err = tx.ExecContext(ctx, "INSERT INTO knowledge_revisions(id, knowledge_id, parent_revision_id, content, reason, state, created_at) VALUES (?, ?, NULL, ?, ?, ?, ?)", revision.ID, revision.KnowledgeID, revision.Content, revision.Reason, revision.State, now.Format(time.RFC3339Nano)); err != nil {
+		return domain.Knowledge{}, domain.Revision{}, fmt.Errorf("insert first revision: %w", err)
+	}
+	if _, err = tx.ExecContext(ctx, "INSERT INTO knowledge_fts(content, knowledge_id, revision_id) VALUES (?, ?, ?)", revision.Content, knowledge.ID, revision.ID); err != nil {
+		return domain.Knowledge{}, domain.Revision{}, fmt.Errorf("index first revision: %w", err)
+	}
+	if _, err = tx.ExecContext(ctx, "UPDATE candidate_items SET state = 'promoted', promoted_knowledge_id = ?, version = version + 1, updated_at = ? WHERE id = ?", knowledge.ID, now.Format(time.RFC3339Nano), candidateID); err != nil {
+		return domain.Knowledge{}, domain.Revision{}, fmt.Errorf("mark candidate promoted: %w", err)
+	}
+	if err = tx.Commit(); err != nil {
+		return domain.Knowledge{}, domain.Revision{}, fmt.Errorf("commit candidate promotion: %w", err)
+	}
+	return knowledge, revision, nil
+}
+
+func (store *Store) ReviseKnowledge(ctx context.Context, knowledgeID, expectedRevisionID, content, reason string) (domain.Revision, error) {
+	if strings.TrimSpace(content) == "" || !validRevisionReason(reason) {
+		return domain.Revision{}, fmt.Errorf("invalid revision content or reason")
+	}
+	tx, err := store.db.BeginTx(ctx, nil)
+	if err != nil {
+		return domain.Revision{}, err
+	}
+	defer tx.Rollback()
+	var currentID string
+	if err = tx.QueryRowContext(ctx, "SELECT current_revision_id FROM knowledge_items WHERE id = ?", knowledgeID).Scan(&currentID); errors.Is(err, sql.ErrNoRows) {
+		return domain.Revision{}, ErrNotFound
+	} else if err != nil {
+		return domain.Revision{}, fmt.Errorf("read current revision: %w", err)
+	}
+	if currentID != expectedRevisionID {
+		return domain.Revision{}, ErrVersionConflict
+	}
+	now := time.Now().UTC()
+	revisionID, err := domain.NewID(now)
+	if err != nil {
+		return domain.Revision{}, err
+	}
+	revision := domain.Revision{ID: revisionID, KnowledgeID: knowledgeID, ParentRevisionID: currentID, Content: content, Reason: reason, State: "current", CreatedAt: now}
+	if _, err = tx.ExecContext(ctx, "UPDATE knowledge_revisions SET state = 'historical' WHERE id = ? AND state = 'current'", currentID); err != nil {
+		return domain.Revision{}, fmt.Errorf("archive current revision: %w", err)
+	}
+	if _, err = tx.ExecContext(ctx, "INSERT INTO knowledge_revisions(id, knowledge_id, parent_revision_id, content, reason, state, created_at) VALUES (?, ?, ?, ?, ?, 'current', ?)", revision.ID, knowledgeID, currentID, content, reason, now.Format(time.RFC3339Nano)); err != nil {
+		return domain.Revision{}, fmt.Errorf("insert revision: %w", err)
+	}
+	if _, err = tx.ExecContext(ctx, "DELETE FROM knowledge_fts WHERE revision_id = ?", currentID); err != nil {
+		return domain.Revision{}, fmt.Errorf("remove historical search index: %w", err)
+	}
+	if _, err = tx.ExecContext(ctx, "INSERT INTO knowledge_fts(content, knowledge_id, revision_id) VALUES (?, ?, ?)", revision.Content, knowledgeID, revision.ID); err != nil {
+		return domain.Revision{}, fmt.Errorf("index revision: %w", err)
+	}
+	if _, err = tx.ExecContext(ctx, "UPDATE knowledge_items SET current_revision_id = ? WHERE id = ?", revision.ID, knowledgeID); err != nil {
+		return domain.Revision{}, fmt.Errorf("set current revision: %w", err)
+	}
+	if err = tx.Commit(); err != nil {
+		return domain.Revision{}, fmt.Errorf("commit revision: %w", err)
+	}
+	return revision, nil
+}
+
+func (store *Store) importByIdempotency(ctx context.Context, key string) (ImportResult, bool, error) {
+	var result ImportResult
+	err := store.db.QueryRowContext(ctx, "SELECT id, source_id FROM ingestions WHERE idempotency_key = ?", key).Scan(&result.IngestionID, &result.SourceID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ImportResult{}, false, nil
+	}
+	if err != nil {
+		return ImportResult{}, false, fmt.Errorf("read idempotent import: %w", err)
+	}
+	items, err := store.ListCandidates(ctx, result.IngestionID)
+	if err != nil {
+		return ImportResult{}, false, err
+	}
+	result.Candidates = items
+	return result, true, nil
+}
+
+func (store *Store) getApproval(ctx context.Context, id string) (Approval, error) {
+	var approval Approval
+	var expires string
+	err := store.db.QueryRowContext(ctx, "SELECT id, action, target_id, state, expires_at FROM approval_requests WHERE id = ?", id).Scan(&approval.ID, &approval.Action, &approval.TargetID, &approval.State, &expires)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Approval{}, ErrNotFound
+	}
+	if err != nil {
+		return Approval{}, fmt.Errorf("read approval: %w", err)
+	}
+	approval.ExpiresAt, err = time.Parse(time.RFC3339Nano, expires)
+	if err != nil {
+		return Approval{}, fmt.Errorf("parse approval expiry: %w", err)
+	}
+	return approval, nil
+}
+
+type candidateScanner interface {
+	Scan(...any) error
+}
+
+func scanCandidate(scanner candidateScanner) (domain.Candidate, error) {
+	var item domain.Candidate
+	var pathJSON, updated string
+	err := scanner.Scan(&item.ID, &item.IngestionID, &item.Ordinal, &item.Version, &item.Content, &pathJSON, &item.State, &item.PromotedKnowledgeID, &updated)
+	if err != nil {
+		return domain.Candidate{}, err
+	}
+	if err := json.Unmarshal([]byte(pathJSON), &item.TitlePath); err != nil {
+		return domain.Candidate{}, fmt.Errorf("decode candidate title path: %w", err)
+	}
+	item.UpdatedAt, err = time.Parse(time.RFC3339Nano, updated)
+	if err != nil {
+		return domain.Candidate{}, fmt.Errorf("parse candidate time: %w", err)
+	}
+	return item, nil
+}
+
+func getCandidateTx(ctx context.Context, tx *sql.Tx, id string) (domain.Candidate, error) {
+	row := tx.QueryRowContext(ctx, `SELECT id, ingestion_id, ordinal, version, content, title_path_json, state, COALESCE(promoted_knowledge_id, ''), updated_at FROM candidate_items WHERE id = ?`, id)
+	item, err := scanCandidate(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return domain.Candidate{}, ErrNotFound
+	}
+	return item, err
+}
+
+func getPromotedKnowledgeTx(ctx context.Context, tx *sql.Tx, id string) (domain.Knowledge, domain.Revision, error) {
+	var knowledge domain.Knowledge
+	var created string
+	err := tx.QueryRowContext(ctx, "SELECT id, state, current_revision_id, created_at FROM knowledge_items WHERE id = ?", id).Scan(&knowledge.ID, &knowledge.State, &knowledge.CurrentRevisionID, &created)
+	if err != nil {
+		return domain.Knowledge{}, domain.Revision{}, fmt.Errorf("read promoted knowledge: %w", err)
+	}
+	knowledge.CreatedAt, err = time.Parse(time.RFC3339Nano, created)
+	if err != nil {
+		return domain.Knowledge{}, domain.Revision{}, err
+	}
+	var revision domain.Revision
+	var parent sql.NullString
+	err = tx.QueryRowContext(ctx, "SELECT id, knowledge_id, parent_revision_id, content, reason, state, created_at FROM knowledge_revisions WHERE id = ?", knowledge.CurrentRevisionID).Scan(&revision.ID, &revision.KnowledgeID, &parent, &revision.Content, &revision.Reason, &revision.State, &created)
+	if err != nil {
+		return domain.Knowledge{}, domain.Revision{}, fmt.Errorf("read promoted revision: %w", err)
+	}
+	revision.ParentRevisionID = parent.String
+	revision.CreatedAt, err = time.Parse(time.RFC3339Nano, created)
+	return knowledge, revision, err
+}
+
+func contentHash(content string) string {
+	sum := sha256.Sum256([]byte(content))
+	return hex.EncodeToString(sum[:])
+}
+
+func actionHash(action, targetID string) string {
+	sum := sha256.Sum256([]byte(action + "\x00" + targetID))
+	return hex.EncodeToString(sum[:])
+}
+
+func nullIfEmpty(value string) any {
+	if value == "" {
+		return nil
+	}
+	return value
+}
+
+func validRevisionReason(value string) bool {
+	switch value {
+	case "typo", "format", "entry_error", "opinion_change", "fact_update", "time_change", "correction":
+		return true
+	default:
+		return false
+	}
+}
