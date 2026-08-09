@@ -188,6 +188,19 @@ CREATE TABLE pending_items (
   updated_at TEXT NOT NULL
 );`,
 	},
+	{
+		version: 6,
+		sql: `
+CREATE TABLE rpc_idempotency_records (
+  caller TEXT NOT NULL,
+  method TEXT NOT NULL,
+  idempotency_key TEXT NOT NULL,
+  parameters_hash TEXT NOT NULL,
+  result_json TEXT NOT NULL,
+  completed_at TEXT NOT NULL,
+  PRIMARY KEY(caller, method, idempotency_key)
+);`,
+	},
 }
 
 func currentSchemaVersion(migrations []migration) int {

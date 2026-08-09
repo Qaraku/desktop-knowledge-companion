@@ -26,7 +26,7 @@ func TestOpenCreatesManagedDirectoriesAndSQLiteFeatures(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = core.Close() })
 
-	if health := core.Health(); !health.Ready || health.SchemaVersion != 5 || health.DataDir != root {
+	if health := core.Health(); !health.Ready || health.SchemaVersion != 6 || health.DataDir != root {
 		t.Fatalf("unexpected health: %#v", health)
 	}
 	for _, name := range []string{"knowledge.db", "backups", "cache", "core.lock"} {
@@ -87,8 +87,8 @@ func TestMigrationCreatesBackupAndDoesNotRepeat(t *testing.T) {
 		t.Fatalf("close migrated store: %v", err)
 	}
 	entries, err := os.ReadDir(filepath.Join(root, "backups"))
-	if err != nil || len(entries) != 4 {
-		t.Fatalf("expected four migration backups, entries=%d err=%v", len(entries), err)
+	if err != nil || len(entries) != 5 {
+		t.Fatalf("expected five migration backups, entries=%d err=%v", len(entries), err)
 	}
 
 	core, err = Open(context.Background(), root)
@@ -97,7 +97,7 @@ func TestMigrationCreatesBackupAndDoesNotRepeat(t *testing.T) {
 	}
 	defer core.Close()
 	entries, err = os.ReadDir(filepath.Join(root, "backups"))
-	if err != nil || len(entries) != 4 {
+	if err != nil || len(entries) != 5 {
 		t.Fatalf("migration must not repeat, entries=%d err=%v", len(entries), err)
 	}
 }

@@ -83,6 +83,43 @@ func TestServerDispatchesIdempotentImportAndCandidateRead(t *testing.T) {
 	}
 }
 
+func TestServerReplaysWriteResultAndRejectsIdempotencyConflict(t *testing.T) {
+	core, err := store.Open(context.Background(), t.TempDir())
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer core.Close()
+	server := NewServer(core)
+	imported, err := server.knowledge.Import(context.Background(), "text", "Original", "", "rpc-idempotency-import")
+	if err != nil {
+		t.Fatalf("import: %v", err)
+	}
+	item := request{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage("1"),
+		Method:  "candidate.update",
+		Params:  json.RawMessage(`{"id":"` + imported.Candidates[0].ID + `","expected_version":1,"content":"Updated"}`),
+		Meta:    meta{ProtocolVersion: 1, RequestID: "0198c787-8bf0-7afe-8c7d-9a41c6671c23", Caller: "test", IdempotencyKey: "rpc-candidate-update-1"},
+	}
+	first := server.dispatch(context.Background(), item)
+	if first.Error != nil {
+		t.Fatalf("first update: %#v", first.Error)
+	}
+	second := server.dispatch(context.Background(), item)
+	if second.Error != nil {
+		t.Fatalf("replayed update: %#v", second.Error)
+	}
+	candidate, err := core.GetCandidate(context.Background(), imported.Candidates[0].ID)
+	if err != nil || candidate.Version != 2 || candidate.Content != "Updated" {
+		t.Fatalf("candidate after replay = %#v, %v", candidate, err)
+	}
+	item.Params = json.RawMessage(`{"id":"` + imported.Candidates[0].ID + `","expected_version":1,"content":"Changed"}`)
+	conflict := server.dispatch(context.Background(), item)
+	if conflict.Error == nil || conflict.Error.Data.Code != "IDEMPOTENCY_CONFLICT" {
+		t.Fatalf("idempotency conflict = %#v", conflict.Error)
+	}
+}
+
 func TestServerDispatchesKnowledgeRevision(t *testing.T) {
 	core, err := store.Open(context.Background(), t.TempDir())
 	if err != nil {

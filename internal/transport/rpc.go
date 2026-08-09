@@ -3,6 +3,7 @@ package transport
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -106,14 +107,46 @@ func (server *Server) dispatch(ctx context.Context, item request) response {
 	if writeMethod(item.Method) && item.Meta.IdempotencyKey == "" {
 		return errorResponse(item.ID, item.Meta.RequestID, "VALIDATION_FAILED", "idempotency_key is required for writes", false)
 	}
+	var parametersHash string
+	if writeMethod(item.Method) {
+		canonical, err := canonicalJSON(item.Params)
+		if err != nil {
+			return errorResponse(item.ID, item.Meta.RequestID, "VALIDATION_FAILED", "invalid JSON-RPC parameters", false)
+		}
+		sum := sha256.Sum256(canonical)
+		parametersHash = fmt.Sprintf("%x", sum[:])
+		record, found, err := server.store.GetRPCIdempotencyRecord(ctx, item.Meta.Caller, item.Method, item.Meta.IdempotencyKey)
+		if err != nil {
+			return errorResponse(item.ID, item.Meta.RequestID, "STORAGE_UNAVAILABLE", "request could not be completed", false)
+		}
+		if found {
+			if record.ParametersHash != parametersHash {
+				return errorResponse(item.ID, item.Meta.RequestID, "IDEMPOTENCY_CONFLICT", "request could not be completed", false)
+			}
+			return successResponse(item.ID, item.Meta.RequestID, json.RawMessage(record.ResultJSON))
+		}
+	}
 	result, err := server.call(ctx, item)
 	if err != nil {
 		return errorResponse(item.ID, item.Meta.RequestID, errorCode(err), "request could not be completed", false)
 	}
-	return response{JSONRPC: "2.0", ID: item.ID, Result: struct {
+	if writeMethod(item.Method) {
+		encoded, err := json.Marshal(result)
+		if err != nil {
+			return errorResponse(item.ID, item.Meta.RequestID, "STORAGE_UNAVAILABLE", "request could not be completed", false)
+		}
+		if err := server.store.SaveRPCIdempotencyRecord(ctx, item.Meta.Caller, item.Method, item.Meta.IdempotencyKey, parametersHash, string(encoded)); err != nil {
+			return errorResponse(item.ID, item.Meta.RequestID, "STORAGE_UNAVAILABLE", "request could not be completed", false)
+		}
+	}
+	return successResponse(item.ID, item.Meta.RequestID, result)
+}
+
+func successResponse(id json.RawMessage, requestID string, value any) response {
+	return response{JSONRPC: "2.0", ID: id, Result: struct {
 		RequestID string `json:"request_id"`
 		Value     any    `json:"value"`
-	}{RequestID: item.Meta.RequestID, Value: result}}
+	}{RequestID: requestID, Value: value}}
 }
 
 func (server *Server) call(ctx context.Context, item request) (any, error) {
@@ -331,11 +364,21 @@ func errorCode(err error) string {
 		return "VERSION_CONFLICT"
 	case errors.Is(err, store.ErrApprovalInvalid):
 		return "APPROVAL_INVALID"
+	case errors.Is(err, store.ErrIdempotencyConflict):
+		return "IDEMPOTENCY_CONFLICT"
 	case errors.Is(err, store.ErrInvalidState):
 		return "VALIDATION_FAILED"
 	default:
 		return "VALIDATION_FAILED"
 	}
+}
+
+func canonicalJSON(raw json.RawMessage) ([]byte, error) {
+	var value any
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return nil, err
+	}
+	return json.Marshal(value)
 }
 
 func validateRequest(item request) (response, bool) {
