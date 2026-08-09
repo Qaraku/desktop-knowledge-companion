@@ -1,0 +1,12 @@
+node_modules/
+dist/
+target/
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.coverage
+build/
+pyinstaller-build/
+src-tauri/gen/
