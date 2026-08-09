@@ -24,7 +24,12 @@ jobs:
         with:
           toolchain: 1.85.0
       - run: go test ./...
-      - run: go build ./cmd/knowledge-core
+      - name: Build Go sidecar
+        run: go build -o artifacts/knowledge-core${{ runner.os == 'Windows' && '.exe' || '' }} ./cmd/knowledge-core
+      - uses: actions/upload-artifact@v4
+        with:
+          name: knowledge-core-${{ runner.os }}
+          path: artifacts/knowledge-core*
       - run: npm ci
       - run: npm test
       - run: npm run build
