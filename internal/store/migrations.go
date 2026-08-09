@@ -201,6 +201,27 @@ CREATE TABLE rpc_idempotency_records (
   PRIMARY KEY(caller, method, idempotency_key)
 );`,
 	},
+	{
+		version: 7,
+		sql: `
+CREATE TABLE candidate_items_next (
+  id TEXT PRIMARY KEY,
+  ingestion_id TEXT NOT NULL REFERENCES ingestions(id),
+  ordinal INTEGER NOT NULL,
+  version INTEGER NOT NULL,
+  content TEXT NOT NULL,
+  title_path_json TEXT NOT NULL,
+  state TEXT NOT NULL CHECK(state IN ('proposed', 'editing', 'rejected', 'superseded', 'promoted')),
+  promoted_knowledge_id TEXT,
+  updated_at TEXT NOT NULL,
+  UNIQUE(ingestion_id, ordinal)
+);
+INSERT INTO candidate_items_next(id, ingestion_id, ordinal, version, content, title_path_json, state, promoted_knowledge_id, updated_at)
+SELECT id, ingestion_id, ordinal, version, content, title_path_json, state, promoted_knowledge_id, updated_at
+FROM candidate_items;
+DROP TABLE candidate_items;
+ALTER TABLE candidate_items_next RENAME TO candidate_items;`,
+	},
 }
 
 func currentSchemaVersion(migrations []migration) int {

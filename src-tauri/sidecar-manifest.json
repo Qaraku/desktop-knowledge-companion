@@ -1,6 +1,6 @@
 {
   "core_version": "0.1.0",
   "protocol_version": 1,
-  "schema_version": 6,
+  "schema_version": 7,
   "targets": ["windows-x64", "linux-x64"]
 }

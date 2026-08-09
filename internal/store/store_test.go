@@ -26,7 +26,7 @@ func TestOpenCreatesManagedDirectoriesAndSQLiteFeatures(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = core.Close() })
 
-	if health := core.Health(); !health.Ready || health.SchemaVersion != 6 || health.DataDir != root {
+	if health := core.Health(); !health.Ready || health.SchemaVersion != 7 || health.DataDir != root {
 		t.Fatalf("unexpected health: %#v", health)
 	}
 	for _, name := range []string{"knowledge.db", "backups", "cache", "core.lock"} {
@@ -87,8 +87,8 @@ func TestMigrationCreatesBackupAndDoesNotRepeat(t *testing.T) {
 		t.Fatalf("close migrated store: %v", err)
 	}
 	entries, err := os.ReadDir(filepath.Join(root, "backups"))
-	if err != nil || len(entries) != 5 {
-		t.Fatalf("expected five migration backups, entries=%d err=%v", len(entries), err)
+	if err != nil || len(entries) != 6 {
+		t.Fatalf("expected six migration backups, entries=%d err=%v", len(entries), err)
 	}
 
 	core, err = Open(context.Background(), root)
@@ -97,8 +97,37 @@ func TestMigrationCreatesBackupAndDoesNotRepeat(t *testing.T) {
 	}
 	defer core.Close()
 	entries, err = os.ReadDir(filepath.Join(root, "backups"))
-	if err != nil || len(entries) != 5 {
+	if err != nil || len(entries) != 6 {
 		t.Fatalf("migration must not repeat, entries=%d err=%v", len(entries), err)
+	}
+}
+
+func TestCandidateStateMigrationPreservesExistingRows(t *testing.T) {
+	root := t.TempDir()
+	legacy, err := openWithMigrations(context.Background(), root, defaultMigrations[:6])
+	if err != nil {
+		t.Fatalf("open schema six store: %v", err)
+	}
+	now := "2026-08-09T00:00:00Z"
+	if _, err := legacy.DB().Exec(`INSERT INTO source_documents(id, kind, content, content_hash, input_at) VALUES ('source', 'text', 'Original', 'hash', ?);
+INSERT INTO ingestions(id, source_id, idempotency_key, state, created_at) VALUES ('ingestion', 'source', 'legacy-key', 'candidates_ready', ?);
+INSERT INTO candidate_items(id, ingestion_id, ordinal, version, content, title_path_json, state, updated_at) VALUES ('candidate', 'ingestion', 0, 1, 'Candidate', '[]', 'proposed', ?);`, now, now, now); err != nil {
+		t.Fatalf("seed schema six candidate: %v", err)
+	}
+	if err := legacy.Close(); err != nil {
+		t.Fatalf("close schema six store: %v", err)
+	}
+	migrated, err := Open(context.Background(), root)
+	if err != nil {
+		t.Fatalf("migrate candidate state: %v", err)
+	}
+	defer migrated.Close()
+	item, err := migrated.GetCandidate(context.Background(), "candidate")
+	if err != nil || item.State != "proposed" {
+		t.Fatalf("migrated candidate = %#v, %v", item, err)
+	}
+	if _, err := migrated.DB().Exec(`UPDATE candidate_items SET state = 'superseded' WHERE id = 'candidate'`); err != nil {
+		t.Fatalf("superseded state should be accepted: %v", err)
 	}
 }
 

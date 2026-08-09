@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -310,6 +311,154 @@ func (store *Store) RejectCandidate(ctx context.Context, id string, expectedVers
 		return domain.Candidate{}, ErrInvalidState
 	}
 	return store.GetCandidate(ctx, id)
+}
+
+func (store *Store) SplitCandidate(ctx context.Context, id string, expectedVersion int, parts []string) ([]domain.Candidate, error) {
+	parts = normalizedCandidateParts(parts)
+	if len(parts) < 2 {
+		return nil, fmt.Errorf("at least two non-empty candidate parts are required")
+	}
+	tx, err := store.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("begin candidate split: %w", err)
+	}
+	defer tx.Rollback()
+	candidate, err := getCandidateTx(ctx, tx, id)
+	if err != nil {
+		return nil, err
+	}
+	if !candidateEditable(candidate.State) {
+		return nil, ErrInvalidState
+	}
+	if candidate.Version != expectedVersion {
+		return nil, ErrVersionConflict
+	}
+	now := time.Now().UTC()
+	shift := len(parts) - 1
+	if _, err = tx.ExecContext(ctx, `UPDATE candidate_items SET ordinal = -ordinal - 1 WHERE ingestion_id = ? AND ordinal > ?`, candidate.IngestionID, candidate.Ordinal); err != nil {
+		return nil, fmt.Errorf("temporarily shift candidate ordinals: %w", err)
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE candidate_items SET ordinal = -ordinal - 1 + ? WHERE ingestion_id = ? AND ordinal < 0`, shift, candidate.IngestionID); err != nil {
+		return nil, fmt.Errorf("restore candidate ordinals: %w", err)
+	}
+	result, err := tx.ExecContext(ctx, `UPDATE candidate_items SET content = ?, version = version + 1, state = 'editing', updated_at = ? WHERE id = ? AND version = ? AND state IN ('proposed', 'editing')`, parts[0], now.Format(time.RFC3339Nano), candidate.ID, expectedVersion)
+	if err != nil {
+		return nil, fmt.Errorf("update split candidate: %w", err)
+	}
+	if count, _ := result.RowsAffected(); count != 1 {
+		return nil, ErrVersionConflict
+	}
+	candidate.Content = parts[0]
+	candidate.Version++
+	candidate.State = domain.CandidateEditing
+	candidate.UpdatedAt = now
+	created := []domain.Candidate{candidate}
+	titlePath, err := json.Marshal(candidate.TitlePath)
+	if err != nil {
+		return nil, fmt.Errorf("marshal split candidate title path: %w", err)
+	}
+	for index, content := range parts[1:] {
+		item := candidate
+		item.ID, err = domain.NewID(now)
+		if err != nil {
+			return nil, err
+		}
+		item.Ordinal = candidate.Ordinal + index + 1
+		item.Version = 1
+		item.Content = content
+		item.State = domain.CandidateProposed
+		item.PromotedKnowledgeID = ""
+		if _, err = tx.ExecContext(ctx, `INSERT INTO candidate_items(id, ingestion_id, ordinal, version, content, title_path_json, state, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, item.ID, item.IngestionID, item.Ordinal, item.Version, item.Content, titlePath, item.State, now.Format(time.RFC3339Nano)); err != nil {
+			return nil, fmt.Errorf("insert split candidate: %w", err)
+		}
+		created = append(created, item)
+	}
+	if err = tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit candidate split: %w", err)
+	}
+	return created, nil
+}
+
+func (store *Store) MergeCandidates(ctx context.Context, candidates []domain.CandidateVersion) (domain.Candidate, error) {
+	if len(candidates) < 2 {
+		return domain.Candidate{}, fmt.Errorf("at least two candidates are required to merge")
+	}
+	tx, err := store.db.BeginTx(ctx, nil)
+	if err != nil {
+		return domain.Candidate{}, fmt.Errorf("begin candidate merge: %w", err)
+	}
+	defer tx.Rollback()
+	items := make([]domain.Candidate, 0, len(candidates))
+	seen := make(map[string]struct{}, len(candidates))
+	for _, reference := range candidates {
+		if reference.ID == "" || reference.ExpectedVersion < 1 {
+			return domain.Candidate{}, fmt.Errorf("candidate ID and expected version are required")
+		}
+		if _, duplicate := seen[reference.ID]; duplicate {
+			return domain.Candidate{}, fmt.Errorf("candidate IDs must be unique")
+		}
+		seen[reference.ID] = struct{}{}
+		item, err := getCandidateTx(ctx, tx, reference.ID)
+		if err != nil {
+			return domain.Candidate{}, err
+		}
+		if !candidateEditable(item.State) {
+			return domain.Candidate{}, ErrInvalidState
+		}
+		if item.Version != reference.ExpectedVersion {
+			return domain.Candidate{}, ErrVersionConflict
+		}
+		if len(items) > 0 && items[0].IngestionID != item.IngestionID {
+			return domain.Candidate{}, fmt.Errorf("candidates must share an ingestion")
+		}
+		items = append(items, item)
+	}
+	sort.Slice(items, func(left, right int) bool { return items[left].Ordinal < items[right].Ordinal })
+	contents := make([]string, 0, len(items))
+	for _, item := range items {
+		contents = append(contents, item.Content)
+	}
+	now := time.Now().UTC()
+	primary := items[0]
+	mergedContent := strings.Join(contents, "\n\n")
+	result, err := tx.ExecContext(ctx, `UPDATE candidate_items SET content = ?, version = version + 1, state = 'editing', updated_at = ? WHERE id = ? AND version = ? AND state IN ('proposed', 'editing')`, mergedContent, now.Format(time.RFC3339Nano), primary.ID, primary.Version)
+	if err != nil {
+		return domain.Candidate{}, fmt.Errorf("update merged candidate: %w", err)
+	}
+	if count, _ := result.RowsAffected(); count != 1 {
+		return domain.Candidate{}, ErrVersionConflict
+	}
+	for _, item := range items[1:] {
+		result, err = tx.ExecContext(ctx, `UPDATE candidate_items SET state = 'superseded', version = version + 1, updated_at = ? WHERE id = ? AND version = ? AND state IN ('proposed', 'editing')`, now.Format(time.RFC3339Nano), item.ID, item.Version)
+		if err != nil {
+			return domain.Candidate{}, fmt.Errorf("supersede merged candidate: %w", err)
+		}
+		if count, _ := result.RowsAffected(); count != 1 {
+			return domain.Candidate{}, ErrVersionConflict
+		}
+	}
+	if err = tx.Commit(); err != nil {
+		return domain.Candidate{}, fmt.Errorf("commit candidate merge: %w", err)
+	}
+	primary.Content = mergedContent
+	primary.Version++
+	primary.State = domain.CandidateEditing
+	primary.UpdatedAt = now
+	return primary, nil
+}
+
+func normalizedCandidateParts(parts []string) []string {
+	result := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if trimmed := strings.TrimSpace(part); trimmed != "" {
+			result = append(result, trimmed)
+		}
+	}
+	return result
+}
+
+func candidateEditable(state domain.CandidateState) bool {
+	return state == domain.CandidateProposed || state == domain.CandidateEditing
 }
 
 func (store *Store) RequestCandidateApproval(ctx context.Context, candidateID, caller string, expiresAt time.Time) (Approval, error) {

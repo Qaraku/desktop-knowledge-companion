@@ -55,7 +55,7 @@ jobs:
           dpkg-deb -x src-tauri/target/release/bundle/deb/*.deb "$package_root"
           test -f "$package_root/usr/lib/Desktop Knowledge Companion/sidecar-manifest.json"
           "$package_root/usr/bin/knowledge-core" health --data-dir "$package_root/data" --json | grep '"ready":true'
-          "$package_root/usr/bin/knowledge-core" health --data-dir "$package_root/data" --json | grep '"schema_version":6'
+          "$package_root/usr/bin/knowledge-core" health --data-dir "$package_root/data" --json | grep '"schema_version":7'
       - name: Verify AppImage contents
         if: runner.os == 'Linux'
         run: |
@@ -68,7 +68,7 @@ jobs:
           test -x "$package_root/squashfs-root/usr/bin/knowledge-core"
           test -f "$package_root/squashfs-root/usr/lib/Desktop Knowledge Companion/sidecar-manifest.json"
           "$package_root/squashfs-root/usr/bin/knowledge-core" health --data-dir "$package_root/data" --json | grep '"ready":true'
-          "$package_root/squashfs-root/usr/bin/knowledge-core" health --data-dir "$package_root/data" --json | grep '"schema_version":6'
+          "$package_root/squashfs-root/usr/bin/knowledge-core" health --data-dir "$package_root/data" --json | grep '"schema_version":7'
       - name: Record Linux package checksums
         if: runner.os == 'Linux'
         run: sha256sum src-tauri/target/release/bundle/deb/*.deb src-tauri/target/release/bundle/appimage/*.AppImage > artifacts/linux-packages.sha256

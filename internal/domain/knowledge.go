@@ -5,11 +5,17 @@ import "time"
 type CandidateState string
 
 const (
-	CandidateProposed CandidateState = "proposed"
-	CandidateEditing  CandidateState = "editing"
-	CandidateRejected CandidateState = "rejected"
-	CandidatePromoted CandidateState = "promoted"
+	CandidateProposed   CandidateState = "proposed"
+	CandidateEditing    CandidateState = "editing"
+	CandidateRejected   CandidateState = "rejected"
+	CandidateSuperseded CandidateState = "superseded"
+	CandidatePromoted   CandidateState = "promoted"
 )
+
+type CandidateVersion struct {
+	ID              string `json:"id"`
+	ExpectedVersion int    `json:"expected_version"`
+}
 
 type Candidate struct {
 	ID                  string         `json:"id"`

@@ -9,7 +9,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 static REQUEST_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 const CORE_PROTOCOL_VERSION: u8 = 1;
-const CORE_SCHEMA_VERSION: u16 = 6;
+const CORE_SCHEMA_VERSION: u16 = 7;
 
 #[derive(Debug)]
 pub(crate) struct SidecarLaunch {
@@ -228,7 +228,7 @@ mod tests {
     fn write_manifest(root: &std::path::Path) {
         std::fs::write(
             root.join("sidecar-manifest.json"),
-            r#"{"core_version":"0.1.0","protocol_version":1,"schema_version":6,"targets":["windows-x64","linux-x64"]}"#,
+            r#"{"core_version":"0.1.0","protocol_version":1,"schema_version":7,"targets":["windows-x64","linux-x64"]}"#,
         )
         .unwrap();
     }
@@ -271,7 +271,7 @@ mod tests {
         assert!(SidecarLaunch::new(root.clone(), root.join("bin"), root.join("data")).is_err());
         std::fs::write(
             root.join("sidecar-manifest.json"),
-            r#"{"core_version":"0.1.0","protocol_version":1,"schema_version":6,"targets":["windows-x64"]}"#,
+            r#"{"core_version":"0.1.0","protocol_version":1,"schema_version":7,"targets":["windows-x64"]}"#,
         )
         .unwrap();
         assert!(SidecarLaunch::new(root.clone(), root.join("bin"), root.join("data")).is_err());

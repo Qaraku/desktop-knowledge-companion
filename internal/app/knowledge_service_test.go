@@ -91,6 +91,77 @@ func TestRejectedCandidateRetainsImmutableSource(t *testing.T) {
 	}
 }
 
+func TestCandidateSplitKeepsSourceAndOriginalOrdering(t *testing.T) {
+	storage, err := store.Open(context.Background(), t.TempDir())
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer storage.Close()
+	service := NewKnowledgeService(storage)
+	imported, err := service.Import(context.Background(), "markdown", "# One\n\nAlpha\n\n# Two\n\nBeta\n\n# Three\n\nGamma", "notes.md", "split-candidate")
+	if err != nil {
+		t.Fatalf("import: %v", err)
+	}
+	split, err := service.SplitCandidate(context.Background(), imported.Candidates[1].ID, 1, []string{"Beta first", "Beta second"})
+	if err != nil || len(split) != 2 || split[0].State != domain.CandidateEditing || split[1].State != domain.CandidateProposed {
+		t.Fatalf("split candidate = %#v, %v", split, err)
+	}
+	items, err := storage.ListCandidates(context.Background(), imported.IngestionID)
+	if err != nil {
+		t.Fatalf("list candidates: %v", err)
+	}
+	if len(items) != 4 || items[0].Content != "Alpha" || items[1].Content != "Beta first" || items[2].Content != "Beta second" || items[3].Content != "Gamma" {
+		t.Fatalf("split order = %#v", items)
+	}
+	for index, item := range items {
+		if item.Ordinal != index || item.IngestionID != imported.IngestionID {
+			t.Fatalf("split candidate metadata = %#v", item)
+		}
+	}
+	if _, err := service.SplitCandidate(context.Background(), imported.Candidates[1].ID, 1, []string{"stale", "write"}); !errors.Is(err, store.ErrVersionConflict) {
+		t.Fatalf("stale split = %v", err)
+	}
+	var source string
+	if err := storage.DB().QueryRow("SELECT content FROM source_documents WHERE id = ?", imported.SourceID).Scan(&source); err != nil || source != "# One\n\nAlpha\n\n# Two\n\nBeta\n\n# Three\n\nGamma" {
+		t.Fatalf("immutable source = %q, %v", source, err)
+	}
+}
+
+func TestCandidateMergeSupersedesNonPrimaryCandidates(t *testing.T) {
+	storage, err := store.Open(context.Background(), t.TempDir())
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer storage.Close()
+	service := NewKnowledgeService(storage)
+	imported, err := service.Import(context.Background(), "markdown", "# First\n\nAlpha\n\n# Second\n\nBeta", "notes.md", "merge-candidates")
+	if err != nil {
+		t.Fatalf("import: %v", err)
+	}
+	merged, err := service.MergeCandidates(context.Background(), []domain.CandidateVersion{
+		{ID: imported.Candidates[1].ID, ExpectedVersion: 1},
+		{ID: imported.Candidates[0].ID, ExpectedVersion: 1},
+	})
+	if err != nil || merged.ID != imported.Candidates[0].ID || merged.Content != "Alpha\n\nBeta" || merged.Version != 2 || merged.State != domain.CandidateEditing {
+		t.Fatalf("merge candidates = %#v, %v", merged, err)
+	}
+	superseded, err := storage.GetCandidate(context.Background(), imported.Candidates[1].ID)
+	if err != nil || superseded.State != domain.CandidateSuperseded || superseded.Version != 2 {
+		t.Fatalf("superseded candidate = %#v, %v", superseded, err)
+	}
+	pending, err := service.ListPendingCandidates(context.Background())
+	if err != nil || len(pending) != 1 || pending[0].ID != merged.ID {
+		t.Fatalf("pending candidates = %#v, %v", pending, err)
+	}
+	other, err := service.Import(context.Background(), "text", "Other", "", "merge-other")
+	if err != nil {
+		t.Fatalf("import other: %v", err)
+	}
+	if _, err := service.MergeCandidates(context.Background(), []domain.CandidateVersion{{ID: merged.ID, ExpectedVersion: merged.Version}, {ID: other.Candidates[0].ID, ExpectedVersion: 1}}); err == nil {
+		t.Fatal("expected cross-ingestion merge rejection")
+	}
+}
+
 func TestListPendingCandidatesExcludesRejectedAndPromotedItems(t *testing.T) {
 	storage, err := store.Open(context.Background(), t.TempDir())
 	if err != nil {

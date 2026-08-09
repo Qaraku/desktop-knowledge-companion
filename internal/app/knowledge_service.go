@@ -36,6 +36,14 @@ func (service *KnowledgeService) RejectCandidate(ctx context.Context, id string,
 	return service.store.RejectCandidate(ctx, id, expectedVersion)
 }
 
+func (service *KnowledgeService) SplitCandidate(ctx context.Context, id string, expectedVersion int, parts []string) ([]domain.Candidate, error) {
+	return service.store.SplitCandidate(ctx, id, expectedVersion, parts)
+}
+
+func (service *KnowledgeService) MergeCandidates(ctx context.Context, candidates []domain.CandidateVersion) (domain.Candidate, error) {
+	return service.store.MergeCandidates(ctx, candidates)
+}
+
 func (service *KnowledgeService) ListPendingCandidates(ctx context.Context) ([]domain.Candidate, error) {
 	return service.store.ListPendingCandidates(ctx)
 }
