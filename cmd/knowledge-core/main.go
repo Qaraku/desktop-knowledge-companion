@@ -22,7 +22,7 @@ func main() {
 
 func run(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: knowledge-core <serve|health|import|query|run> --data-dir <absolute-path> [--json]")
+		return errors.New("usage: knowledge-core <serve|health|import|knowledge|query|run> --data-dir <absolute-path> [--json]")
 	}
 	command := args[0]
 	flags := flag.NewFlagSet(command, flag.ContinueOnError)
@@ -65,6 +65,12 @@ func run(args []string) error {
 		return err
 	case "import":
 		result, err := app.NewKnowledgeService(core).Import(context.Background(), *kind, *content, *displayName, *idempotencyKey)
+		if err != nil {
+			return err
+		}
+		return writeResult(result, *jsonOutput)
+	case "knowledge":
+		result, err := app.NewKnowledgeService(core).ListKnowledge(context.Background())
 		if err != nil {
 			return err
 		}

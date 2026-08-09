@@ -122,7 +122,7 @@ func (store *Store) ListKnowledge(ctx context.Context) ([]KnowledgeSummary, erro
 		return nil, fmt.Errorf("list knowledge: %w", err)
 	}
 	defer rows.Close()
-	var result []KnowledgeSummary
+	result := make([]KnowledgeSummary, 0)
 	for rows.Next() {
 		var item KnowledgeSummary
 		var created string
