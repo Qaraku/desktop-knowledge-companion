@@ -9,6 +9,7 @@ import (
 	"io"
 	"regexp"
 	"strings"
+	"time"
 
 	"desktop-knowledge-companion/internal/agent"
 	"desktop-knowledge-companion/internal/app"
@@ -236,6 +237,50 @@ func (server *Server) call(ctx context.Context, item request) (any, error) {
 			return nil, err
 		}
 		return map[string]bool{"authorized": true}, nil
+	case "agent.prompt.suggest":
+		var p struct {
+			Topic  string `json:"topic"`
+			Detail string `json:"detail"`
+		}
+		if err := json.Unmarshal(item.Params, &p); err != nil {
+			return nil, err
+		}
+		return server.agent.SuggestPrompt(ctx, p.Topic, p.Detail)
+	case "agent.prompt.preference.set":
+		var p struct {
+			Topic         string `json:"topic"`
+			State         string `json:"state"`
+			DeferredUntil string `json:"deferred_until"`
+		}
+		if err := json.Unmarshal(item.Params, &p); err != nil {
+			return nil, err
+		}
+		var deferredUntil *time.Time
+		if p.DeferredUntil != "" {
+			value, err := time.Parse(time.RFC3339Nano, p.DeferredUntil)
+			if err != nil {
+				return nil, fmt.Errorf("invalid deferred_until: %w", err)
+			}
+			deferredUntil = &value
+		}
+		if err := server.agent.SetPromptPreference(ctx, p.Topic, p.State, deferredUntil); err != nil {
+			return nil, err
+		}
+		return map[string]bool{"saved": true}, nil
+	case "agent.pending.list":
+		return server.agent.ListPendingPrompts(ctx)
+	case "agent.pending.resolve":
+		var p struct {
+			ID    string `json:"id"`
+			State string `json:"state"`
+		}
+		if err := json.Unmarshal(item.Params, &p); err != nil {
+			return nil, err
+		}
+		if err := server.agent.ResolvePendingPrompt(ctx, p.ID, p.State); err != nil {
+			return nil, err
+		}
+		return map[string]bool{"resolved": true}, nil
 	case "query.start":
 		var p struct {
 			Question       string `json:"question"`
@@ -263,7 +308,7 @@ var errMethodNotFound = errors.New("method not found")
 
 func writeMethod(method string) bool {
 	switch method {
-	case "import.create", "candidate.update", "candidate.reject", "candidate.request_approval", "approval.resolve", "candidate.approve", "knowledge.revise", "agent.tool.request_approval", "agent.tool.consume_approval", "query.start":
+	case "import.create", "candidate.update", "candidate.reject", "candidate.request_approval", "approval.resolve", "candidate.approve", "knowledge.revise", "agent.tool.request_approval", "agent.tool.consume_approval", "agent.prompt.suggest", "agent.prompt.preference.set", "agent.pending.resolve", "query.start":
 		return true
 	}
 	return false

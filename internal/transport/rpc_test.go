@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"desktop-knowledge-companion/internal/agent"
 	"desktop-knowledge-companion/internal/domain"
@@ -167,5 +168,50 @@ func TestServerExposesAgentToolApproval(t *testing.T) {
 	})
 	if consumed.Error != nil {
 		t.Fatalf("consume approval: %#v", consumed.Error)
+	}
+}
+
+func TestServerExposesAgentPromptLifecycle(t *testing.T) {
+	core, err := store.Open(context.Background(), t.TempDir())
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer core.Close()
+	server := NewServer(core)
+	suggested := server.dispatch(context.Background(), request{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage("1"),
+		Method:  "agent.prompt.suggest",
+		Params:  json.RawMessage(`{"topic":"missing-evidence","detail":"Import relevant material"}`),
+		Meta:    meta{ProtocolVersion: 1, RequestID: "0198c787-8bf0-7afe-8c7d-9a41c6671c23", Caller: "test", IdempotencyKey: "rpc-agent-prompt-1"},
+	})
+	if suggested.Error != nil {
+		t.Fatalf("suggest prompt: %#v", suggested.Error)
+	}
+	suggestion := suggested.Result.(struct {
+		RequestID string `json:"request_id"`
+		Value     any    `json:"value"`
+	}).Value.(agent.PromptSuggestion)
+	if suggestion.PendingItem.State != "open" {
+		t.Fatalf("unexpected suggestion: %#v", suggestion)
+	}
+	listed, err := server.call(context.Background(), request{Method: "agent.pending.list", Params: json.RawMessage(`{}`)})
+	if err != nil || len(listed.([]store.PendingItem)) != 1 {
+		t.Fatalf("pending prompts = %#v, %v", listed, err)
+	}
+	deferredUntil := time.Now().UTC().Add(time.Hour).Format(time.RFC3339Nano)
+	preference := server.dispatch(context.Background(), request{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage("2"),
+		Method:  "agent.prompt.preference.set",
+		Params:  json.RawMessage(`{"topic":"conflict","state":"deferred","deferred_until":"` + deferredUntil + `"}`),
+		Meta:    meta{ProtocolVersion: 1, RequestID: "0198c787-8bf0-7afe-8c7d-9a41c6671c23", Caller: "test", IdempotencyKey: "rpc-agent-preference-1"},
+	})
+	if preference.Error != nil {
+		t.Fatalf("set preference: %#v", preference.Error)
+	}
+	suppressed, err := server.call(context.Background(), request{Method: "agent.prompt.suggest", Params: json.RawMessage(`{"topic":"conflict","detail":"Resolve conflict"}`)})
+	if err != nil || !suppressed.(agent.PromptSuggestion).Suppressed {
+		t.Fatalf("deferred prompt = %#v, %v", suppressed, err)
 	}
 }

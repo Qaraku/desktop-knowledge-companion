@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"time"
 
 	"desktop-knowledge-companion/internal/agent"
 	"desktop-knowledge-companion/internal/app"
@@ -23,14 +24,14 @@ func main() {
 
 func run(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: knowledge-core <serve|health|import|candidate-list|candidate-pending|candidate-update|candidate-reject|candidate-approval|approval-resolve|candidate-promote|knowledge|knowledge-revise|agent-tool-inspect|agent-tool-request-approval|agent-tool-consume-approval|query|run> --data-dir <absolute-path> [--json]")
+		return errors.New("usage: knowledge-core <serve|health|import|candidate-list|candidate-pending|candidate-update|candidate-reject|candidate-approval|approval-resolve|candidate-promote|knowledge|knowledge-revise|agent-tool-inspect|agent-tool-request-approval|agent-tool-consume-approval|agent-prompt-suggest|agent-prompt-preference-set|agent-pending-list|agent-pending-resolve|query|run> --data-dir <absolute-path> [--json]")
 	}
 	command := args[0]
 	flags := flag.NewFlagSet(command, flag.ContinueOnError)
 	flags.SetOutput(os.Stderr)
 	dataDir := flags.String("data-dir", "", "absolute knowledge data directory")
 	jsonOutput := flags.Bool("json", false, "write a JSON result")
-	var content, kind, displayName, idempotencyKey, question, mode, profile, runID, ingestionID, candidateID, approvalID, token, caller, knowledgeID, expectedRevisionID, reason, toolName, parameters *string
+	var content, kind, displayName, idempotencyKey, question, mode, profile, runID, ingestionID, candidateID, approvalID, token, caller, knowledgeID, expectedRevisionID, reason, toolName, parameters, topic, detail, preferenceState, deferredUntil *string
 	var expectedVersion *int
 	var approve *bool
 	switch command {
@@ -82,6 +83,17 @@ func run(args []string) error {
 		parameters = flags.String("parameters", "{}", "JSON tool parameters")
 		token = flags.String("token", "", "approved single-use token")
 		caller = flags.String("caller", "cli", "approval caller")
+	case "agent-prompt-suggest":
+		topic = flags.String("topic", "", "prompt topic")
+		detail = flags.String("detail", "", "prompt detail")
+	case "agent-prompt-preference-set":
+		topic = flags.String("topic", "", "prompt topic")
+		preferenceState = flags.String("state", "", "ignored, deferred, or closed")
+		deferredUntil = flags.String("deferred-until", "", "RFC3339 time for deferred state")
+	case "agent-pending-list":
+	case "agent-pending-resolve":
+		approvalID = flags.String("id", "", "pending item identifier")
+		preferenceState = flags.String("state", "", "ignored, deferred, or closed")
 	}
 	if err := flags.Parse(args[1:]); err != nil {
 		return err
@@ -176,6 +188,36 @@ func run(args []string) error {
 			return err
 		}
 		return writeResult(map[string]bool{"authorized": true}, *jsonOutput)
+	case "agent-prompt-suggest":
+		result, err := agent.NewService(agent.DefaultRegistry(), core).SuggestPrompt(context.Background(), *topic, *detail)
+		if err != nil {
+			return err
+		}
+		return writeResult(result, *jsonOutput)
+	case "agent-prompt-preference-set":
+		var deferred *time.Time
+		if *deferredUntil != "" {
+			value, err := time.Parse(time.RFC3339Nano, *deferredUntil)
+			if err != nil {
+				return fmt.Errorf("parse deferred-until: %w", err)
+			}
+			deferred = &value
+		}
+		if err := agent.NewService(agent.DefaultRegistry(), core).SetPromptPreference(context.Background(), *topic, *preferenceState, deferred); err != nil {
+			return err
+		}
+		return writeResult(map[string]bool{"saved": true}, *jsonOutput)
+	case "agent-pending-list":
+		result, err := agent.NewService(agent.DefaultRegistry(), core).ListPendingPrompts(context.Background())
+		if err != nil {
+			return err
+		}
+		return writeResult(result, *jsonOutput)
+	case "agent-pending-resolve":
+		if err := agent.NewService(agent.DefaultRegistry(), core).ResolvePendingPrompt(context.Background(), *approvalID, *preferenceState); err != nil {
+			return err
+		}
+		return writeResult(map[string]bool{"resolved": true}, *jsonOutput)
 	case "query":
 		result, err := app.NewQueryService(core).Ask(context.Background(), *question, *mode, *profile)
 		if err != nil {
