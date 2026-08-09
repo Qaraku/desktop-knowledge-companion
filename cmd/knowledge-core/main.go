@@ -22,7 +22,7 @@ func main() {
 
 func run(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: knowledge-core <serve|health|import|candidate-list|candidate-approval|approval-resolve|candidate-promote|knowledge|query|run> --data-dir <absolute-path> [--json]")
+		return errors.New("usage: knowledge-core <serve|health|import|candidate-list|candidate-update|candidate-reject|candidate-approval|approval-resolve|candidate-promote|knowledge|query|run> --data-dir <absolute-path> [--json]")
 	}
 	command := args[0]
 	flags := flag.NewFlagSet(command, flag.ContinueOnError)
@@ -30,6 +30,7 @@ func run(args []string) error {
 	dataDir := flags.String("data-dir", "", "absolute knowledge data directory")
 	jsonOutput := flags.Bool("json", false, "write a JSON result")
 	var content, kind, displayName, idempotencyKey, question, mode, profile, runID, ingestionID, candidateID, approvalID, token, caller *string
+	var expectedVersion *int
 	var approve *bool
 	switch command {
 	case "import":
@@ -45,6 +46,13 @@ func run(args []string) error {
 		runID = flags.String("run-id", "", "query run identifier")
 	case "candidate-list":
 		ingestionID = flags.String("ingestion-id", "", "ingestion identifier")
+	case "candidate-update":
+		candidateID = flags.String("candidate-id", "", "candidate identifier")
+		expectedVersion = flags.Int("expected-version", 0, "candidate version to update")
+		content = flags.String("content", "", "replacement candidate content")
+	case "candidate-reject":
+		candidateID = flags.String("candidate-id", "", "candidate identifier")
+		expectedVersion = flags.Int("expected-version", 0, "candidate version to reject")
 	case "candidate-approval":
 		candidateID = flags.String("candidate-id", "", "candidate identifier")
 		caller = flags.String("caller", "cli", "approval caller")
@@ -91,6 +99,18 @@ func run(args []string) error {
 		return writeResult(result, *jsonOutput)
 	case "candidate-list":
 		result, err := core.ListCandidates(context.Background(), *ingestionID)
+		if err != nil {
+			return err
+		}
+		return writeResult(result, *jsonOutput)
+	case "candidate-update":
+		result, err := app.NewKnowledgeService(core).EditCandidate(context.Background(), *candidateID, *expectedVersion, *content)
+		if err != nil {
+			return err
+		}
+		return writeResult(result, *jsonOutput)
+	case "candidate-reject":
+		result, err := app.NewKnowledgeService(core).RejectCandidate(context.Background(), *candidateID, *expectedVersion)
 		if err != nil {
 			return err
 		}
