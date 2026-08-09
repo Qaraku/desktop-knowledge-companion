@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { supportedPlatforms } from "./projectScope";
 
@@ -9,6 +9,7 @@ type QueryRun = { answer?: string; refusal_reason?: string; citations?: Array<{ 
 
 export function App() {
   const [source, setSource] = useState("");
+	const [displayName, setDisplayName] = useState("GUI text");
   const [candidates, setCandidates] = useState<Candidate[]>([]);
   const [knowledge, setKnowledge] = useState<Knowledge[]>([]);
   const [question, setQuestion] = useState("");
@@ -46,12 +47,25 @@ export function App() {
     const content = source.trim();
     if (!content) return;
     try {
-      const response = await invoke<{ result?: { value?: { candidates?: Array<{ id: string; content: string; version: number }> } } }>("desktop_import_text", { content, displayName: "GUI text" });
+      const response = await invoke<{ result?: { value?: { candidates?: Array<{ id: string; content: string; version: number }> } } }>("desktop_import_text", { content, displayName });
       const imported = response.result?.value?.candidates ?? [];
       setCandidates(imported.map((item) => ({ id: item.id, content: item.content, state: "proposed", version: item.version })));
       setSource("");
+		setDisplayName("GUI text");
     } catch {
       setCoreStatus("导入失败：核心不可用或拒绝了请求。");
+    }
+  }
+
+  async function selectMarkdown(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    try {
+      setSource(await file.text());
+      setDisplayName(file.name);
+    } catch {
+      setCoreStatus("读取所选 Markdown 文件失败。");
     }
   }
 
@@ -126,6 +140,10 @@ export function App() {
           <label>
             文本或 Markdown
             <textarea value={source} onChange={(event) => setSource(event.target.value)} placeholder="粘贴需要整理的内容" />
+          </label>
+          <label>
+            选择 Markdown 文件
+            <input type="file" accept=".md,.markdown,text/markdown,text/plain" onChange={selectMarkdown} />
           </label>
           <button type="submit">生成候选</button>
         </form>
