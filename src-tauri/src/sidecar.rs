@@ -71,10 +71,26 @@ impl CoreProcess {
         method: &str,
         params: serde_json::Value,
     ) -> Result<serde_json::Value, &'static str> {
+        self.request_with_idempotency(launch, method, params, None)
+    }
+
+    pub(crate) fn request_with_idempotency(
+        &self,
+        launch: &SidecarLaunch,
+        method: &str,
+        params: serde_json::Value,
+        idempotency_key: Option<&str>,
+    ) -> Result<serde_json::Value, &'static str> {
         self.start(launch)?;
         let mut child = self.0.lock().map_err(|_| "core process lock poisoned")?;
         let process = child.as_mut().ok_or("core process was not started")?;
-        let request = serde_json::json!({"jsonrpc":"2.0","id":1,"method":method,"params":params,"meta":{"protocol_version":1,"request_id":"0198c787-8bf0-7afe-8c7d-9a41c6671c23","caller":"gateway"}}).to_string();
+        let mut meta = serde_json::json!({"protocol_version":1,"request_id":"0198c787-8bf0-7afe-8c7d-9a41c6671c23","caller":"gateway"});
+        if let Some(key) = idempotency_key {
+            meta["idempotency_key"] = serde_json::Value::String(key.to_owned());
+        }
+        let request =
+            serde_json::json!({"jsonrpc":"2.0","id":1,"method":method,"params":params,"meta":meta})
+                .to_string();
         let stdin = process.stdin.as_mut().ok_or("core stdin is unavailable")?;
         stdin
             .write_all(request.as_bytes())

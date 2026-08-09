@@ -1,6 +1,7 @@
 mod data_root;
 mod sidecar;
 
+use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::Manager;
 
 #[derive(serde::Serialize)]
@@ -40,6 +41,26 @@ fn desktop_knowledge_list(
         .map_err(str::to_owned)
 }
 
+#[tauri::command]
+fn desktop_import_text(
+    content: String,
+    display_name: Option<String>,
+    sidecar: tauri::State<'_, sidecar::SidecarLaunch>,
+    process: tauri::State<'_, sidecar::CoreProcess>,
+) -> Result<serde_json::Value, String> {
+    if content.trim().is_empty() {
+        return Err("content is required".to_owned());
+    }
+    let key = format!(
+        "gui-import-{}",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|_| "clock unavailable".to_owned())?
+            .as_nanos()
+    );
+    process.request_with_idempotency(&sidecar, "import.create", serde_json::json!({"kind":"text","content":content,"display_name":display_name.unwrap_or_default()}), Some(&key)).map_err(str::to_owned)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -47,7 +68,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             desktop_core_status,
             desktop_core_start,
-            desktop_knowledge_list
+            desktop_knowledge_list,
+            desktop_import_text
         ])
         .setup(|app| {
             let resolved = app.path().app_local_data_dir()?;
