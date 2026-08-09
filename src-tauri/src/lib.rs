@@ -109,6 +109,23 @@ fn desktop_promote_candidate(
         .map_err(str::to_owned)
 }
 
+#[tauri::command]
+fn desktop_reject_candidate(
+    candidate_id: String,
+    expected_version: i64,
+    sidecar: tauri::State<'_, sidecar::SidecarLaunch>,
+    process: tauri::State<'_, sidecar::CoreProcess>,
+) -> Result<serde_json::Value, String> {
+    process
+        .request_with_idempotency(
+            &sidecar,
+            "candidate.reject",
+            serde_json::json!({"id":candidate_id,"expected_version":expected_version}),
+            Some(&gateway_key("gui-reject")?),
+        )
+        .map_err(str::to_owned)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -118,7 +135,8 @@ pub fn run() {
             desktop_core_start,
             desktop_knowledge_list,
             desktop_import_text,
-            desktop_promote_candidate
+            desktop_promote_candidate,
+            desktop_reject_candidate
         ])
         .setup(|app| {
             let resolved = app.path().app_local_data_dir()?;
