@@ -1,21 +1,88 @@
+import { FormEvent, useMemo, useState } from "react";
 import { supportedPlatforms } from "./projectScope";
 
+type Candidate = { id: number; content: string; state: "proposed" | "promoted" | "rejected" };
+type Knowledge = { id: number; content: string };
+
 export function App() {
+  const [source, setSource] = useState("");
+  const [candidates, setCandidates] = useState<Candidate[]>([]);
+  const [knowledge, setKnowledge] = useState<Knowledge[]>([]);
+  const [question, setQuestion] = useState("");
+  const [answer, setAnswer] = useState("尚未查询。");
+
+  const activeCandidates = useMemo(
+    () => candidates.filter((item) => item.state === "proposed"),
+    [candidates],
+  );
+
+  function importText(event: FormEvent) {
+    event.preventDefault();
+    const content = source.trim();
+    if (!content) return;
+    setCandidates((items) => [...items, { id: Date.now(), content, state: "proposed" }]);
+    setSource("");
+  }
+
+  function updateCandidate(id: number, content: string) {
+    setCandidates((items) => items.map((item) => (item.id === id ? { ...item, content } : item)));
+  }
+
+  function promote(candidate: Candidate) {
+    setCandidates((items) => items.map((item) => (item.id === candidate.id ? { ...item, state: "promoted" } : item)));
+    setKnowledge((items) => [...items, { id: candidate.id, content: candidate.content }]);
+  }
+
+  function reject(id: number) {
+    setCandidates((items) => items.map((item) => (item.id === id ? { ...item, state: "rejected" } : item)));
+  }
+
+  function ask(event: FormEvent) {
+    event.preventDefault();
+    const terms = question.toLocaleLowerCase();
+    const evidence = knowledge.filter((item) => item.content.toLocaleLowerCase().includes(terms));
+    setAnswer(evidence.length ? `个人知识引用：${evidence.map((item) => item.content).join("；")}` : "无法基于个人知识回答。");
+  }
+
   return (
     <main className="app-shell">
-      <p className="eyebrow">Desktop Knowledge Companion</p>
-      <h1>工程基线已就绪</h1>
-      <p>TSK-01 仅初始化桌面壳、GUI 和 Python core 的工作区。</p>
-      <dl>
-        <div>
-          <dt>目标平台</dt>
-          <dd>{supportedPlatforms.join("、")}（Debian/Ubuntu Linux）</dd>
-        </div>
-        <div>
-          <dt>知识核心</dt>
-          <dd>将在 TSK-02 初始化</dd>
-        </div>
-      </dl>
+      <header>
+        <p className="eyebrow">Desktop Knowledge Companion</p>
+        <h1>本地知识工作区</h1>
+        <p>核心运行于 Go sidecar；当前界面调用边界由 Tauri gateway 承担。</p>
+      </header>
+      <section aria-labelledby="import-title">
+        <h2 id="import-title">导入</h2>
+        <form onSubmit={importText}>
+          <label>
+            文本或 Markdown
+            <textarea value={source} onChange={(event) => setSource(event.target.value)} placeholder="粘贴需要整理的内容" />
+          </label>
+          <button type="submit">生成候选</button>
+        </form>
+      </section>
+      <section aria-labelledby="candidate-title">
+        <h2 id="candidate-title">候选审批</h2>
+        {activeCandidates.length === 0 ? <p>暂无待确认候选。</p> : activeCandidates.map((candidate) => (
+          <article key={candidate.id} className="card">
+            <textarea aria-label="候选内容" value={candidate.content} onChange={(event) => updateCandidate(candidate.id, event.target.value)} />
+            <p><button onClick={() => promote(candidate)}>确认入库</button> <button onClick={() => reject(candidate.id)}>拒绝</button></p>
+          </article>
+        ))}
+      </section>
+      <section aria-labelledby="knowledge-title">
+        <h2 id="knowledge-title">正式知识</h2>
+        {knowledge.length === 0 ? <p>尚无已确认知识。</p> : <ul>{knowledge.map((item) => <li key={item.id}>{item.content}</li>)}</ul>}
+      </section>
+      <section aria-labelledby="query-title">
+        <h2 id="query-title">严格问答</h2>
+        <form onSubmit={ask}>
+          <label>问题 <input value={question} onChange={(event) => setQuestion(event.target.value)} /></label>
+          <button type="submit">查询</button>
+        </form>
+        <output>{answer}</output>
+      </section>
+      <footer>目标平台：{supportedPlatforms.join("、")}（Debian/Ubuntu Linux）</footer>
     </main>
   );
 }
