@@ -336,9 +336,13 @@ pub fn run() {
             let data_root =
                 data_root::DefaultDataRoot::new(resolved).map_err(std::io::Error::other)?;
             let resource_dir = app.path().resource_dir()?;
-            let sidecar =
-                sidecar::SidecarLaunch::new(resource_dir, data_root.as_path().to_path_buf())
-                    .map_err(std::io::Error::other)?;
+            let executable_dir = app.path().executable_dir()?;
+            let sidecar = sidecar::SidecarLaunch::new(
+                resource_dir,
+                executable_dir,
+                data_root.as_path().to_path_buf(),
+            )
+            .map_err(std::io::Error::other)?;
             app.manage(data_root);
             app.manage(sidecar);
             app.manage(sidecar::CoreProcess::default());

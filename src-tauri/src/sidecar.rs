@@ -19,12 +19,21 @@ pub(crate) struct SidecarLaunch {
 }
 
 impl SidecarLaunch {
-    pub(crate) fn new(resource_dir: PathBuf, data_dir: PathBuf) -> Result<Self, &'static str> {
-        if !resource_dir.is_absolute() || !data_dir.is_absolute() {
-            return Err("sidecar resource and data directories must be absolute");
+    pub(crate) fn new(
+        resource_dir: PathBuf,
+        executable_dir: PathBuf,
+        data_dir: PathBuf,
+    ) -> Result<Self, &'static str> {
+        if !resource_dir.is_absolute() || !executable_dir.is_absolute() || !data_dir.is_absolute() {
+            return Err("sidecar resource, executable, and data directories must be absolute");
         }
         validate_manifest(&resource_dir)?;
-        let executable = resource_dir.join("binaries").join(sidecar_file_name());
+        let packaged = executable_dir.join(sidecar_file_name());
+        let executable = if packaged.is_file() {
+            packaged
+        } else {
+            resource_dir.join("binaries").join(sidecar_file_name())
+        };
         Ok(Self {
             executable,
             data_dir,
@@ -226,14 +235,19 @@ mod tests {
 
     #[test]
     fn rejects_relative_paths() {
-        assert!(SidecarLaunch::new(PathBuf::from("resource"), PathBuf::from("data")).is_err());
+        assert!(SidecarLaunch::new(
+            PathBuf::from("resource"),
+            PathBuf::from("bin"),
+            PathBuf::from("data")
+        )
+        .is_err());
     }
 
     #[test]
     fn passes_only_fixed_serve_arguments() {
         let resource = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let data = resource.join("data");
-        let launch = SidecarLaunch::new(resource, data.clone()).unwrap();
+        let launch = SidecarLaunch::new(resource.clone(), resource, data.clone()).unwrap();
         let command = launch.command();
         let values: Vec<_> = command
             .get_args()
@@ -254,13 +268,13 @@ mod tests {
         let root =
             std::env::temp_dir().join(format!("knowledge-sidecar-manifest-{}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
-        assert!(SidecarLaunch::new(root.clone(), root.join("data")).is_err());
+        assert!(SidecarLaunch::new(root.clone(), root.join("bin"), root.join("data")).is_err());
         std::fs::write(
             root.join("sidecar-manifest.json"),
             r#"{"core_version":"0.1.0","protocol_version":1,"schema_version":6,"targets":["windows-x64"]}"#,
         )
         .unwrap();
-        assert!(SidecarLaunch::new(root.clone(), root.join("data")).is_err());
+        assert!(SidecarLaunch::new(root.clone(), root.join("bin"), root.join("data")).is_err());
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -271,13 +285,13 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
 
         let root = std::env::temp_dir().join(format!("knowledge-sidecar-{}", std::process::id()));
-        let binaries = root.join("binaries");
+        let binaries = root.join("bin");
         fs::create_dir_all(&binaries).unwrap();
         write_manifest(&root);
         let executable = binaries.join("knowledge-core");
         fs::write(&executable, "#!/bin/sh\nread line\nprintf '%s\\n' '{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"value\":{\"ready\":true}}}'\n").unwrap();
         fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
-        let launch = SidecarLaunch::new(root.clone(), root.join("data")).unwrap();
+        let launch = SidecarLaunch::new(root.clone(), binaries, root.join("data")).unwrap();
         let value = CoreProcess::default().health(&launch).unwrap();
         assert_eq!(value["result"]["value"]["ready"], true);
         fs::remove_dir_all(root).unwrap();
@@ -291,13 +305,13 @@ mod tests {
 
         let root =
             std::env::temp_dir().join(format!("knowledge-sidecar-retry-{}", std::process::id()));
-        let binaries = root.join("binaries");
+        let binaries = root.join("bin");
         fs::create_dir_all(&binaries).unwrap();
         write_manifest(&root);
         let executable = binaries.join("knowledge-core");
         fs::write(&executable, "#!/bin/sh\nstate=\"$0.state\"\nread line\nif [ ! -f \"$state\" ]; then\n  : > \"$state\"\n  exit 1\nfi\nprintf '%s\\n' '{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"value\":{\"ready\":true}}}'\n").unwrap();
         fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
-        let launch = SidecarLaunch::new(root.clone(), root.join("data")).unwrap();
+        let launch = SidecarLaunch::new(root.clone(), binaries, root.join("data")).unwrap();
         let value = CoreProcess::default().health(&launch).unwrap();
         assert_eq!(value["result"]["value"]["ready"], true);
         fs::remove_dir_all(root).unwrap();
@@ -311,7 +325,7 @@ mod tests {
 
         let root =
             std::env::temp_dir().join(format!("knowledge-sidecar-write-{}", std::process::id()));
-        let binaries = root.join("binaries");
+        let binaries = root.join("bin");
         fs::create_dir_all(&binaries).unwrap();
         write_manifest(&root);
         let executable = binaries.join("knowledge-core");
@@ -321,7 +335,7 @@ mod tests {
         )
         .unwrap();
         fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
-        let launch = SidecarLaunch::new(root.clone(), root.join("data")).unwrap();
+        let launch = SidecarLaunch::new(root.clone(), binaries, root.join("data")).unwrap();
         let process = CoreProcess::default();
         let value = process
             .request_with_idempotency(
@@ -361,7 +375,7 @@ mod tests {
             "knowledge-sidecar-request-id-{}",
             std::process::id()
         ));
-        let binaries = root.join("binaries");
+        let binaries = root.join("bin");
         fs::create_dir_all(&binaries).unwrap();
         write_manifest(&root);
         let executable = binaries.join("knowledge-core");
@@ -371,7 +385,7 @@ mod tests {
         )
         .unwrap();
         fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
-        let launch = SidecarLaunch::new(root.clone(), root.join("data")).unwrap();
+        let launch = SidecarLaunch::new(root.clone(), binaries, root.join("data")).unwrap();
         let process = CoreProcess::default();
         process.health(&launch).unwrap();
         process.health(&launch).unwrap();
