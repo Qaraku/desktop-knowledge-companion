@@ -24,6 +24,8 @@ jobs:
         with:
           toolchain: 1.85.0
       - run: go test ./...
+      - run: sh scripts/verify-core.sh
+        shell: bash
       - name: Build Go sidecar
         run: go build -o artifacts/knowledge-core${{ runner.os == 'Windows' && '.exe' || '' }} ./cmd/knowledge-core
       - uses: actions/upload-artifact@v4
