@@ -51,6 +51,10 @@ func TestImportApprovalPromotionAndRevisionAreTraceable(t *testing.T) {
 	if knowledge.CurrentRevisionID != firstRevision.ID || firstRevision.Content != "Alpha, edited" {
 		t.Fatalf("unexpected promoted knowledge/revision: %#v %#v", knowledge, firstRevision)
 	}
+	listed, err := service.ListKnowledge(context.Background())
+	if err != nil || len(listed) != 1 || listed[0].Knowledge.ID != knowledge.ID || listed[0].Content != "Alpha, edited" {
+		t.Fatalf("list knowledge = %#v, %v", listed, err)
+	}
 	replayedKnowledge, replayedRevision, err := service.PromoteCandidate(context.Background(), edited.ID, resolution.Token, "gui")
 	if err != nil || replayedKnowledge.ID != knowledge.ID || replayedRevision.ID != firstRevision.ID {
 		t.Fatalf("promotion replay = %#v %#v %v", replayedKnowledge, replayedRevision, err)

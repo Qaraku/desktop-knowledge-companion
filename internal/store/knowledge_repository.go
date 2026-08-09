@@ -111,6 +111,32 @@ func (store *Store) ListCandidates(ctx context.Context, ingestionID string) ([]d
 	return result, rows.Err()
 }
 
+type KnowledgeSummary struct {
+	Knowledge domain.Knowledge `json:"knowledge"`
+	Content   string           `json:"content"`
+}
+
+func (store *Store) ListKnowledge(ctx context.Context) ([]KnowledgeSummary, error) {
+	rows, err := store.db.QueryContext(ctx, `SELECT k.id, k.state, k.current_revision_id, k.created_at, r.content FROM knowledge_items k JOIN knowledge_revisions r ON r.id = k.current_revision_id ORDER BY k.created_at DESC`)
+	if err != nil {
+		return nil, fmt.Errorf("list knowledge: %w", err)
+	}
+	defer rows.Close()
+	var result []KnowledgeSummary
+	for rows.Next() {
+		var item KnowledgeSummary
+		var created string
+		if err := rows.Scan(&item.Knowledge.ID, &item.Knowledge.State, &item.Knowledge.CurrentRevisionID, &created, &item.Content); err != nil {
+			return nil, err
+		}
+		if item.Knowledge.CreatedAt, err = time.Parse(time.RFC3339Nano, created); err != nil {
+			return nil, err
+		}
+		result = append(result, item)
+	}
+	return result, rows.Err()
+}
+
 func (store *Store) GetCandidate(ctx context.Context, id string) (domain.Candidate, error) {
 	row := store.db.QueryRowContext(ctx, `SELECT id, ingestion_id, ordinal, version, content, title_path_json, state, COALESCE(promoted_knowledge_id, ''), updated_at FROM candidate_items WHERE id = ?`, id)
 	item, err := scanCandidate(row)

@@ -183,6 +183,8 @@ func (server *Server) call(ctx context.Context, item request) (any, error) {
 		}
 		knowledge, revision, err := server.knowledge.PromoteCandidate(ctx, p.CandidateID, p.Token, item.Meta.Caller)
 		return map[string]any{"knowledge": knowledge, "revision": revision}, err
+	case "knowledge.list":
+		return server.knowledge.ListKnowledge(ctx)
 	case "query.start":
 		var p struct {
 			Question       string `json:"question"`

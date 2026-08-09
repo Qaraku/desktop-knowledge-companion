@@ -54,3 +54,7 @@ func (service *KnowledgeService) PromoteCandidate(ctx context.Context, candidate
 func (service *KnowledgeService) ReviseKnowledge(ctx context.Context, knowledgeID, expectedRevisionID, content, reason string) (domain.Revision, error) {
 	return service.store.ReviseKnowledge(ctx, knowledgeID, expectedRevisionID, content, reason)
 }
+
+func (service *KnowledgeService) ListKnowledge(ctx context.Context) ([]store.KnowledgeSummary, error) {
+	return service.store.ListKnowledge(ctx)
+}
