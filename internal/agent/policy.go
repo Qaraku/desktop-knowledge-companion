@@ -27,6 +27,20 @@ type Registry struct {
 	tools map[string]Tool
 }
 
+func DefaultRegistry() *Registry {
+	registry, err := NewRegistry([]Tool{
+		{Name: "knowledge.read", Risk: Read},
+		{Name: "network.search", Risk: Network},
+		{Name: "candidate.draft", Risk: DraftWrite},
+		{Name: "candidate.promote", Risk: ConfirmedWrite},
+		{Name: "knowledge.delete", Risk: Destructive},
+	})
+	if err != nil {
+		panic(err)
+	}
+	return registry
+}
+
 func NewRegistry(tools []Tool) (*Registry, error) {
 	registry := &Registry{tools: make(map[string]Tool, len(tools))}
 	for _, tool := range tools {

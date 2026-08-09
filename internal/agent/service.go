@@ -2,6 +2,8 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"time"
 
 	"desktop-knowledge-companion/internal/store"
@@ -17,15 +19,27 @@ func (service *Service) RequestHighRiskApproval(ctx context.Context, toolName, c
 	if !exists || (tool.Risk != ConfirmedWrite && tool.Risk != Destructive) {
 		return store.Approval{}, store.ErrInvalidState
 	}
-	return service.store.RequestToolApproval(ctx, toolName, caller, parameters, time.Now().UTC().Add(5*time.Minute))
+	canonical, err := canonicalParameters(parameters)
+	if err != nil {
+		return store.Approval{}, err
+	}
+	return service.store.RequestToolApproval(ctx, toolName, caller, canonical, time.Now().UTC().Add(5*time.Minute))
 }
 
 func (service *Service) ConsumeHighRiskApproval(ctx context.Context, toolName, caller, parameters, token string) error {
-	return service.store.ConsumeToolApproval(ctx, toolName, caller, parameters, token)
+	canonical, err := canonicalParameters(parameters)
+	if err != nil {
+		return err
+	}
+	return service.store.ConsumeToolApproval(ctx, toolName, caller, canonical, token)
 }
 
 func NewService(registry *Registry, storage *store.Store) *Service {
 	return &Service{registry: registry, store: storage}
+}
+
+func (service *Service) InspectTool(name string) Decision {
+	return service.registry.Decide(name, false)
 }
 
 func (service *Service) RequestTool(ctx context.Context, name, parameters string, networkConfigured bool) (Decision, error) {
@@ -44,4 +58,16 @@ func (service *Service) RequestTool(ctx context.Context, name, parameters string
 		return Decision{}, err
 	}
 	return decision, nil
+}
+
+func canonicalParameters(parameters string) (string, error) {
+	var value any
+	if err := json.Unmarshal([]byte(parameters), &value); err != nil {
+		return "", fmt.Errorf("tool parameters must be JSON: %w", err)
+	}
+	canonical, err := json.Marshal(value)
+	if err != nil {
+		return "", fmt.Errorf("canonicalize tool parameters: %w", err)
+	}
+	return string(canonical), nil
 }
