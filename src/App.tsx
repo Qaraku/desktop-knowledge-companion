@@ -5,6 +5,7 @@ import { supportedPlatforms } from "./projectScope";
 type Candidate = { id: string | number; content: string; state: "proposed" | "editing" | "promoted" | "rejected"; version: number };
 type Knowledge = { id: string | number; content: string };
 type KnowledgeListResponse = { result?: { value?: Array<{ knowledge: { id: string }; content: string }> } };
+type QueryRun = { answer?: string; refusal_reason?: string; citations?: Array<{ excerpt: string }> };
 
 export function App() {
   const [source, setSource] = useState("");
@@ -12,6 +13,7 @@ export function App() {
   const [knowledge, setKnowledge] = useState<Knowledge[]>([]);
   const [question, setQuestion] = useState("");
   const [answer, setAnswer] = useState("尚未查询。");
+	const [citations, setCitations] = useState<string[]>([]);
 	const [coreStatus, setCoreStatus] = useState("桌面 gateway 未连接。");
 
 	useEffect(() => {
@@ -94,11 +96,20 @@ export function App() {
     }
   }
 
-  function ask(event: FormEvent) {
+  async function ask(event: FormEvent) {
     event.preventDefault();
-    const terms = question.toLocaleLowerCase();
-    const evidence = knowledge.filter((item) => item.content.toLocaleLowerCase().includes(terms));
-    setAnswer(evidence.length ? `个人知识引用：${evidence.map((item) => item.content).join("；")}` : "无法基于个人知识回答。");
+    const trimmedQuestion = question.trim();
+    if (!trimmedQuestion) return;
+    try {
+      const response = await invoke<{ result?: { value?: QueryRun } }>("desktop_query", { question: trimmedQuestion });
+      const run = response.result?.value;
+      if (!run) throw new Error("missing query response");
+      setAnswer(run.answer || "无法基于个人知识回答。");
+      setCitations((run.citations ?? []).map((citation) => citation.excerpt));
+    } catch {
+      setCitations([]);
+      setAnswer("查询失败：核心不可用或拒绝了请求。");
+    }
   }
 
   return (
@@ -139,6 +150,7 @@ export function App() {
           <button type="submit">查询</button>
         </form>
         <output>{answer}</output>
+        {citations.length > 0 && <ol aria-label="个人知识引用">{citations.map((citation, index) => <li key={`${index}-${citation}`}>{citation}</li>)}</ol>}
       </section>
       <footer>目标平台：{supportedPlatforms.join("、")}（Debian/Ubuntu Linux）</footer>
     </main>
