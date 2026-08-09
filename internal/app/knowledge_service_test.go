@@ -114,3 +114,48 @@ func TestListPendingCandidatesExcludesRejectedAndPromotedItems(t *testing.T) {
 		t.Fatalf("pending candidates = %#v, %v", items, err)
 	}
 }
+
+func TestKnowledgeDetailRetainsRevisionsAndConflictRelations(t *testing.T) {
+	storage, err := store.Open(context.Background(), t.TempDir())
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer storage.Close()
+	service := NewKnowledgeService(storage)
+	promote := func(content, key string) domain.Knowledge {
+		t.Helper()
+		imported, err := service.Import(context.Background(), "text", content, "", key)
+		if err != nil {
+			t.Fatalf("import %s: %v", content, err)
+		}
+		approval, err := service.RequestCandidatePromotion(context.Background(), imported.Candidates[0].ID, "test")
+		if err != nil {
+			t.Fatalf("request approval: %v", err)
+		}
+		resolution, err := service.ResolveApproval(context.Background(), approval.ID, "test", true)
+		if err != nil {
+			t.Fatalf("resolve approval: %v", err)
+		}
+		knowledge, _, err := service.PromoteCandidate(context.Background(), imported.Candidates[0].ID, resolution.Token, "test")
+		if err != nil {
+			t.Fatalf("promote candidate: %v", err)
+		}
+		return knowledge
+	}
+	first := promote("First view", "detail-first")
+	second := promote("Second view", "detail-second")
+	if _, err := service.ReviseKnowledge(context.Background(), first.ID, first.CurrentRevisionID, "First view corrected", "fact_update"); err != nil {
+		t.Fatalf("revise first knowledge: %v", err)
+	}
+	relation, err := service.LinkKnowledgeConflict(context.Background(), first.ID, second.ID)
+	if err != nil || relation.Kind != "conflicts_with" {
+		t.Fatalf("link conflict = %#v, %v", relation, err)
+	}
+	detail, err := service.GetKnowledge(context.Background(), first.ID)
+	if err != nil {
+		t.Fatalf("get knowledge: %v", err)
+	}
+	if detail.Knowledge.State != "conflicted" || len(detail.Revisions) != 2 || len(detail.Relations) != 1 || detail.Relations[0].ToKnowledgeID != second.ID {
+		t.Fatalf("unexpected knowledge detail: %#v", detail)
+	}
+}

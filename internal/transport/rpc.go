@@ -244,6 +244,14 @@ func (server *Server) call(ctx context.Context, item request) (any, error) {
 		return map[string]any{"knowledge": knowledge, "revision": revision}, err
 	case "knowledge.list":
 		return server.knowledge.ListKnowledge(ctx)
+	case "knowledge.get":
+		var p struct {
+			ID string `json:"id"`
+		}
+		if err := json.Unmarshal(item.Params, &p); err != nil {
+			return nil, err
+		}
+		return server.knowledge.GetKnowledge(ctx, p.ID)
 	case "knowledge.revise":
 		var p struct {
 			KnowledgeID        string `json:"knowledge_id"`
@@ -255,6 +263,15 @@ func (server *Server) call(ctx context.Context, item request) (any, error) {
 			return nil, err
 		}
 		return server.knowledge.ReviseKnowledge(ctx, p.KnowledgeID, p.ExpectedRevisionID, p.Content, p.Reason)
+	case "knowledge.link_conflict":
+		var p struct {
+			FromKnowledgeID string `json:"from_knowledge_id"`
+			ToKnowledgeID   string `json:"to_knowledge_id"`
+		}
+		if err := json.Unmarshal(item.Params, &p); err != nil {
+			return nil, err
+		}
+		return server.knowledge.LinkKnowledgeConflict(ctx, p.FromKnowledgeID, p.ToKnowledgeID)
 	case "agent.tool.inspect":
 		var p struct {
 			Name string `json:"name"`
@@ -377,7 +394,7 @@ var errMethodNotFound = errors.New("method not found")
 
 func writeMethod(method string) bool {
 	switch method {
-	case "import.create", "candidate.update", "candidate.reject", "candidate.request_approval", "approval.resolve", "candidate.approve", "knowledge.revise", "agent.tool.request_approval", "agent.tool.consume_approval", "agent.prompt.suggest", "agent.prompt.preference.set", "agent.pending.resolve", "query.start", "query.cancel":
+	case "import.create", "candidate.update", "candidate.reject", "candidate.request_approval", "approval.resolve", "candidate.approve", "knowledge.revise", "knowledge.link_conflict", "agent.tool.request_approval", "agent.tool.consume_approval", "agent.prompt.suggest", "agent.prompt.preference.set", "agent.pending.resolve", "query.start", "query.cancel":
 		return true
 	}
 	return false

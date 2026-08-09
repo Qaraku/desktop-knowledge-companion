@@ -133,6 +133,12 @@ type KnowledgeSummary struct {
 	Content   string           `json:"content"`
 }
 
+type KnowledgeDetail struct {
+	Knowledge domain.Knowledge           `json:"knowledge"`
+	Revisions []domain.Revision          `json:"revisions"`
+	Relations []domain.KnowledgeRelation `json:"relations"`
+}
+
 func (store *Store) ListKnowledge(ctx context.Context) ([]KnowledgeSummary, error) {
 	rows, err := store.db.QueryContext(ctx, `SELECT k.id, k.state, k.current_revision_id, k.created_at, r.content FROM knowledge_items k JOIN knowledge_revisions r ON r.id = k.current_revision_id ORDER BY k.created_at DESC`)
 	if err != nil {
@@ -152,6 +158,96 @@ func (store *Store) ListKnowledge(ctx context.Context) ([]KnowledgeSummary, erro
 		result = append(result, item)
 	}
 	return result, rows.Err()
+}
+
+func (store *Store) GetKnowledge(ctx context.Context, id string) (KnowledgeDetail, error) {
+	var detail KnowledgeDetail
+	var createdAt string
+	err := store.db.QueryRowContext(ctx, `SELECT id, state, current_revision_id, created_at FROM knowledge_items WHERE id = ?`, id).Scan(&detail.Knowledge.ID, &detail.Knowledge.State, &detail.Knowledge.CurrentRevisionID, &createdAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return KnowledgeDetail{}, ErrNotFound
+	}
+	if err != nil {
+		return KnowledgeDetail{}, fmt.Errorf("get knowledge: %w", err)
+	}
+	if detail.Knowledge.CreatedAt, err = time.Parse(time.RFC3339Nano, createdAt); err != nil {
+		return KnowledgeDetail{}, fmt.Errorf("parse knowledge creation time: %w", err)
+	}
+	revisions, err := store.db.QueryContext(ctx, `SELECT id, knowledge_id, parent_revision_id, content, reason, state, created_at FROM knowledge_revisions WHERE knowledge_id = ? ORDER BY created_at ASC`, id)
+	if err != nil {
+		return KnowledgeDetail{}, fmt.Errorf("list knowledge revisions: %w", err)
+	}
+	defer revisions.Close()
+	for revisions.Next() {
+		revision, err := scanRevision(revisions)
+		if err != nil {
+			return KnowledgeDetail{}, err
+		}
+		detail.Revisions = append(detail.Revisions, revision)
+	}
+	if err := revisions.Err(); err != nil {
+		return KnowledgeDetail{}, err
+	}
+	relations, err := store.db.QueryContext(ctx, `SELECT id, from_knowledge_id, to_knowledge_id, kind, created_at FROM knowledge_relations WHERE from_knowledge_id = ? OR to_knowledge_id = ? ORDER BY created_at ASC`, id, id)
+	if err != nil {
+		return KnowledgeDetail{}, fmt.Errorf("list knowledge relations: %w", err)
+	}
+	defer relations.Close()
+	for relations.Next() {
+		relation, err := scanKnowledgeRelation(relations)
+		if err != nil {
+			return KnowledgeDetail{}, err
+		}
+		detail.Relations = append(detail.Relations, relation)
+	}
+	if err := relations.Err(); err != nil {
+		return KnowledgeDetail{}, err
+	}
+	return detail, nil
+}
+
+func (store *Store) LinkKnowledgeConflict(ctx context.Context, fromKnowledgeID, toKnowledgeID string) (domain.KnowledgeRelation, error) {
+	if fromKnowledgeID == "" || toKnowledgeID == "" || fromKnowledgeID == toKnowledgeID {
+		return domain.KnowledgeRelation{}, ErrInvalidState
+	}
+	tx, err := store.db.BeginTx(ctx, nil)
+	if err != nil {
+		return domain.KnowledgeRelation{}, fmt.Errorf("begin conflict relation: %w", err)
+	}
+	defer tx.Rollback()
+	for _, id := range []string{fromKnowledgeID, toKnowledgeID} {
+		var found string
+		if err := tx.QueryRowContext(ctx, `SELECT id FROM knowledge_items WHERE id = ?`, id).Scan(&found); errors.Is(err, sql.ErrNoRows) {
+			return domain.KnowledgeRelation{}, ErrNotFound
+		} else if err != nil {
+			return domain.KnowledgeRelation{}, fmt.Errorf("read conflict knowledge: %w", err)
+		}
+	}
+	var relation domain.KnowledgeRelation
+	var createdAt string
+	err = tx.QueryRowContext(ctx, `SELECT id, from_knowledge_id, to_knowledge_id, kind, created_at FROM knowledge_relations WHERE from_knowledge_id = ? AND to_knowledge_id = ? AND kind = 'conflicts_with'`, fromKnowledgeID, toKnowledgeID).Scan(&relation.ID, &relation.FromKnowledgeID, &relation.ToKnowledgeID, &relation.Kind, &createdAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		now := time.Now().UTC()
+		relation.ID, err = domain.NewID(now)
+		if err != nil {
+			return domain.KnowledgeRelation{}, err
+		}
+		relation.FromKnowledgeID, relation.ToKnowledgeID, relation.Kind, relation.CreatedAt = fromKnowledgeID, toKnowledgeID, "conflicts_with", now
+		if _, err = tx.ExecContext(ctx, `INSERT INTO knowledge_relations(id, from_knowledge_id, to_knowledge_id, kind, created_at) VALUES (?, ?, ?, 'conflicts_with', ?)`, relation.ID, relation.FromKnowledgeID, relation.ToKnowledgeID, now.Format(time.RFC3339Nano)); err != nil {
+			return domain.KnowledgeRelation{}, fmt.Errorf("create conflict relation: %w", err)
+		}
+	} else if err != nil {
+		return domain.KnowledgeRelation{}, fmt.Errorf("read conflict relation: %w", err)
+	} else if relation.CreatedAt, err = time.Parse(time.RFC3339Nano, createdAt); err != nil {
+		return domain.KnowledgeRelation{}, fmt.Errorf("parse conflict creation time: %w", err)
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE knowledge_items SET state = 'conflicted' WHERE id IN (?, ?)`, fromKnowledgeID, toKnowledgeID); err != nil {
+		return domain.KnowledgeRelation{}, fmt.Errorf("mark conflicted knowledge: %w", err)
+	}
+	if err = tx.Commit(); err != nil {
+		return domain.KnowledgeRelation{}, fmt.Errorf("commit conflict relation: %w", err)
+	}
+	return relation, nil
 }
 
 func (store *Store) GetCandidate(ctx context.Context, id string) (domain.Candidate, error) {
@@ -399,6 +495,38 @@ func scanCandidate(scanner candidateScanner) (domain.Candidate, error) {
 		return domain.Candidate{}, fmt.Errorf("parse candidate time: %w", err)
 	}
 	return item, nil
+}
+
+type revisionScanner interface {
+	Scan(...any) error
+}
+
+func scanRevision(scanner revisionScanner) (domain.Revision, error) {
+	var revision domain.Revision
+	var parent sql.NullString
+	var createdAt string
+	if err := scanner.Scan(&revision.ID, &revision.KnowledgeID, &parent, &revision.Content, &revision.Reason, &revision.State, &createdAt); err != nil {
+		return domain.Revision{}, err
+	}
+	var err error
+	revision.ParentRevisionID = parent.String
+	if revision.CreatedAt, err = time.Parse(time.RFC3339Nano, createdAt); err != nil {
+		return domain.Revision{}, fmt.Errorf("parse revision creation time: %w", err)
+	}
+	return revision, nil
+}
+
+func scanKnowledgeRelation(scanner revisionScanner) (domain.KnowledgeRelation, error) {
+	var relation domain.KnowledgeRelation
+	var createdAt string
+	if err := scanner.Scan(&relation.ID, &relation.FromKnowledgeID, &relation.ToKnowledgeID, &relation.Kind, &createdAt); err != nil {
+		return domain.KnowledgeRelation{}, err
+	}
+	var err error
+	if relation.CreatedAt, err = time.Parse(time.RFC3339Nano, createdAt); err != nil {
+		return domain.KnowledgeRelation{}, fmt.Errorf("parse relation creation time: %w", err)
+	}
+	return relation, nil
 }
 
 func getCandidateTx(ctx context.Context, tx *sql.Tx, id string) (domain.Candidate, error) {

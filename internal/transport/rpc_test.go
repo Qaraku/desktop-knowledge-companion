@@ -173,6 +173,54 @@ func TestServerCancelsActiveQueryRun(t *testing.T) {
 	}
 }
 
+func TestServerLinksAndReadsKnowledgeConflicts(t *testing.T) {
+	core, err := store.Open(context.Background(), t.TempDir())
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer core.Close()
+	server := NewServer(core)
+	promote := func(content, key string) domain.Knowledge {
+		t.Helper()
+		imported, err := server.knowledge.Import(context.Background(), "text", content, "", key)
+		if err != nil {
+			t.Fatalf("import: %v", err)
+		}
+		approval, err := server.knowledge.RequestCandidatePromotion(context.Background(), imported.Candidates[0].ID, "test")
+		if err != nil {
+			t.Fatalf("request approval: %v", err)
+		}
+		resolution, err := server.knowledge.ResolveApproval(context.Background(), approval.ID, "test", true)
+		if err != nil {
+			t.Fatalf("resolve approval: %v", err)
+		}
+		knowledge, _, err := server.knowledge.PromoteCandidate(context.Background(), imported.Candidates[0].ID, resolution.Token, "test")
+		if err != nil {
+			t.Fatalf("promote: %v", err)
+		}
+		return knowledge
+	}
+	first, second := promote("First", "rpc-conflict-first"), promote("Second", "rpc-conflict-second")
+	linked := server.dispatch(context.Background(), request{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage("1"),
+		Method:  "knowledge.link_conflict",
+		Params:  json.RawMessage(`{"from_knowledge_id":"` + first.ID + `","to_knowledge_id":"` + second.ID + `"}`),
+		Meta:    meta{ProtocolVersion: 1, RequestID: "0198c787-8bf0-7afe-8c7d-9a41c6671c23", Caller: "test", IdempotencyKey: "rpc-conflict-link-1"},
+	})
+	if linked.Error != nil {
+		t.Fatalf("link conflict: %#v", linked.Error)
+	}
+	detail, err := server.call(context.Background(), request{Method: "knowledge.get", Params: json.RawMessage(`{"id":"` + first.ID + `"}`)})
+	if err != nil {
+		t.Fatalf("get knowledge: %v", err)
+	}
+	value := detail.(store.KnowledgeDetail)
+	if value.Knowledge.State != "conflicted" || len(value.Relations) != 1 || value.Relations[0].ToKnowledgeID != second.ID {
+		t.Fatalf("knowledge detail: %#v", value)
+	}
+}
+
 func TestServerDispatchesKnowledgeRevision(t *testing.T) {
 	core, err := store.Open(context.Background(), t.TempDir())
 	if err != nil {

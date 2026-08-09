@@ -62,3 +62,11 @@ func (service *KnowledgeService) ReviseKnowledge(ctx context.Context, knowledgeI
 func (service *KnowledgeService) ListKnowledge(ctx context.Context) ([]store.KnowledgeSummary, error) {
 	return service.store.ListKnowledge(ctx)
 }
+
+func (service *KnowledgeService) GetKnowledge(ctx context.Context, id string) (store.KnowledgeDetail, error) {
+	return service.store.GetKnowledge(ctx, id)
+}
+
+func (service *KnowledgeService) LinkKnowledgeConflict(ctx context.Context, fromKnowledgeID, toKnowledgeID string) (domain.KnowledgeRelation, error) {
+	return service.store.LinkKnowledgeConflict(ctx, fromKnowledgeID, toKnowledgeID)
+}

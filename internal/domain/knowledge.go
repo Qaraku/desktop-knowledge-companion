@@ -39,3 +39,11 @@ type Revision struct {
 	State            string    `json:"state"`
 	CreatedAt        time.Time `json:"created_at"`
 }
+
+type KnowledgeRelation struct {
+	ID              string    `json:"id"`
+	FromKnowledgeID string    `json:"from_knowledge_id"`
+	ToKnowledgeID   string    `json:"to_knowledge_id"`
+	Kind            string    `json:"kind"`
+	CreatedAt       time.Time `json:"created_at"`
+}
