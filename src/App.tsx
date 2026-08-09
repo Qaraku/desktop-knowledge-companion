@@ -2,7 +2,7 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { supportedPlatforms } from "./projectScope";
 
-type Candidate = { id: string | number; content: string; state: "proposed" | "promoted" | "rejected"; version: number };
+type Candidate = { id: string | number; content: string; state: "proposed" | "editing" | "promoted" | "rejected"; version: number };
 type Knowledge = { id: string | number; content: string };
 type KnowledgeListResponse = { result?: { value?: Array<{ knowledge: { id: string }; content: string }> } };
 
@@ -35,7 +35,7 @@ export function App() {
 	}, []);
 
   const activeCandidates = useMemo(
-    () => candidates.filter((item) => item.state === "proposed"),
+    () => candidates.filter((item) => item.state === "proposed" || item.state === "editing"),
     [candidates],
   );
 
@@ -55,6 +55,23 @@ export function App() {
 
   function updateCandidate(id: string | number, content: string) {
     setCandidates((items) => items.map((item) => (item.id === id ? { ...item, content } : item)));
+  }
+
+  async function saveCandidate(candidate: Candidate, content: string) {
+    if (content === candidate.content) return;
+    try {
+      const response = await invoke<{ result?: { value?: Candidate } }>("desktop_update_candidate", {
+        candidateId: String(candidate.id),
+        expectedVersion: candidate.version,
+        content,
+      });
+      const saved = response.result?.value;
+      if (!saved) throw new Error("missing candidate response");
+      setCandidates((items) => items.map((item) => (item.id === candidate.id ? saved : item)));
+    } catch {
+      setCandidates((items) => items.map((item) => (item.id === candidate.id ? candidate : item)));
+      setCoreStatus("保存候选失败：候选已变更或核心请求被拒绝。");
+    }
   }
 
   async function promote(candidate: Candidate) {
@@ -106,7 +123,7 @@ export function App() {
         <h2 id="candidate-title">候选审批</h2>
         {activeCandidates.length === 0 ? <p>暂无待确认候选。</p> : activeCandidates.map((candidate) => (
           <article key={candidate.id} className="card">
-            <textarea aria-label="候选内容" value={candidate.content} onChange={(event) => updateCandidate(candidate.id, event.target.value)} />
+            <textarea aria-label="候选内容" value={candidate.content} onChange={(event) => updateCandidate(candidate.id, event.target.value)} onBlur={(event) => void saveCandidate(candidate, event.target.value)} />
             <p><button onClick={() => promote(candidate)}>确认入库</button> <button onClick={() => reject(candidate)}>拒绝</button></p>
           </article>
         ))}
