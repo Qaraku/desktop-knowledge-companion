@@ -8,6 +8,8 @@ use std::sync::{
 use std::time::{SystemTime, UNIX_EPOCH};
 
 static REQUEST_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+const CORE_PROTOCOL_VERSION: u8 = 1;
+const CORE_SCHEMA_VERSION: u16 = 6;
 
 #[derive(Debug)]
 pub(crate) struct SidecarLaunch {
@@ -21,6 +23,7 @@ impl SidecarLaunch {
         if !resource_dir.is_absolute() || !data_dir.is_absolute() {
             return Err("sidecar resource and data directories must be absolute");
         }
+        validate_manifest(&resource_dir)?;
         let executable = resource_dir.join("binaries").join(sidecar_file_name());
         Ok(Self {
             executable,
@@ -39,6 +42,32 @@ impl SidecarLaunch {
     pub(crate) fn executable(&self) -> &Path {
         &self.executable
     }
+}
+
+#[derive(serde::Deserialize)]
+struct SidecarManifest {
+    core_version: String,
+    protocol_version: u8,
+    schema_version: u16,
+    targets: Vec<String>,
+}
+
+fn validate_manifest(resource_dir: &Path) -> Result<(), &'static str> {
+    let encoded = std::fs::read_to_string(resource_dir.join("sidecar-manifest.json"))
+        .map_err(|_| "packaged sidecar manifest is unavailable")?;
+    let manifest: SidecarManifest =
+        serde_json::from_str(&encoded).map_err(|_| "packaged sidecar manifest is invalid")?;
+    if manifest.core_version != env!("CARGO_PKG_VERSION")
+        || manifest.protocol_version != CORE_PROTOCOL_VERSION
+        || manifest.schema_version != CORE_SCHEMA_VERSION
+        || !manifest
+            .targets
+            .iter()
+            .any(|target| target == sidecar_target())
+    {
+        return Err("packaged sidecar manifest is incompatible");
+    }
+    Ok(())
 }
 
 #[derive(Default)]
@@ -171,10 +200,29 @@ fn sidecar_file_name() -> &'static str {
     }
 }
 
+fn sidecar_target() -> &'static str {
+    if cfg!(all(target_os = "windows", target_arch = "x86_64")) {
+        "windows-x64"
+    } else if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+        "linux-x64"
+    } else {
+        "unsupported"
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{CoreProcess, SidecarLaunch};
     use std::path::PathBuf;
+
+    #[cfg(unix)]
+    fn write_manifest(root: &std::path::Path) {
+        std::fs::write(
+            root.join("sidecar-manifest.json"),
+            r#"{"core_version":"0.1.0","protocol_version":1,"schema_version":6,"targets":["windows-x64","linux-x64"]}"#,
+        )
+        .unwrap();
+    }
 
     #[test]
     fn rejects_relative_paths() {
@@ -183,7 +231,7 @@ mod tests {
 
     #[test]
     fn passes_only_fixed_serve_arguments() {
-        let resource = std::env::current_dir().unwrap();
+        let resource = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let data = resource.join("data");
         let launch = SidecarLaunch::new(resource, data.clone()).unwrap();
         let command = launch.command();
@@ -201,6 +249,21 @@ mod tests {
         );
     }
 
+    #[test]
+    fn rejects_missing_or_incompatible_manifest() {
+        let root =
+            std::env::temp_dir().join(format!("knowledge-sidecar-manifest-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        assert!(SidecarLaunch::new(root.clone(), root.join("data")).is_err());
+        std::fs::write(
+            root.join("sidecar-manifest.json"),
+            r#"{"core_version":"0.1.0","protocol_version":1,"schema_version":6,"targets":["windows-x64"]}"#,
+        )
+        .unwrap();
+        assert!(SidecarLaunch::new(root.clone(), root.join("data")).is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     #[cfg(unix)]
     #[test]
     fn health_round_trip_uses_stdio_json_rpc() {
@@ -210,6 +273,7 @@ mod tests {
         let root = std::env::temp_dir().join(format!("knowledge-sidecar-{}", std::process::id()));
         let binaries = root.join("binaries");
         fs::create_dir_all(&binaries).unwrap();
+        write_manifest(&root);
         let executable = binaries.join("knowledge-core");
         fs::write(&executable, "#!/bin/sh\nread line\nprintf '%s\\n' '{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"value\":{\"ready\":true}}}'\n").unwrap();
         fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
@@ -229,6 +293,7 @@ mod tests {
             std::env::temp_dir().join(format!("knowledge-sidecar-retry-{}", std::process::id()));
         let binaries = root.join("binaries");
         fs::create_dir_all(&binaries).unwrap();
+        write_manifest(&root);
         let executable = binaries.join("knowledge-core");
         fs::write(&executable, "#!/bin/sh\nstate=\"$0.state\"\nread line\nif [ ! -f \"$state\" ]; then\n  : > \"$state\"\n  exit 1\nfi\nprintf '%s\\n' '{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"value\":{\"ready\":true}}}'\n").unwrap();
         fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
@@ -248,6 +313,7 @@ mod tests {
             std::env::temp_dir().join(format!("knowledge-sidecar-write-{}", std::process::id()));
         let binaries = root.join("binaries");
         fs::create_dir_all(&binaries).unwrap();
+        write_manifest(&root);
         let executable = binaries.join("knowledge-core");
         fs::write(
             &executable,
@@ -297,6 +363,7 @@ mod tests {
         ));
         let binaries = root.join("binaries");
         fs::create_dir_all(&binaries).unwrap();
+        write_manifest(&root);
         let executable = binaries.join("knowledge-core");
         fs::write(
             &executable,
