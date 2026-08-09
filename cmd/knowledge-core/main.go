@@ -24,7 +24,7 @@ func main() {
 
 func run(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: knowledge-core <serve|health|import|candidate-list|candidate-pending|candidate-update|candidate-reject|candidate-approval|approval-resolve|candidate-promote|knowledge|knowledge-revise|agent-tool-inspect|agent-tool-request-approval|agent-tool-consume-approval|agent-prompt-suggest|agent-prompt-preference-set|agent-pending-list|agent-pending-resolve|query|run> --data-dir <absolute-path> [--json]")
+		return errors.New("usage: knowledge-core <serve|health|state-snapshot|import|candidate-list|candidate-pending|candidate-update|candidate-reject|candidate-approval|approval-resolve|candidate-promote|knowledge|knowledge-revise|agent-tool-inspect|agent-tool-request-approval|agent-tool-consume-approval|agent-prompt-suggest|agent-prompt-preference-set|agent-pending-list|agent-pending-resolve|query|run> --data-dir <absolute-path> [--json]")
 	}
 	command := args[0]
 	flags := flag.NewFlagSet(command, flag.ContinueOnError)
@@ -35,6 +35,7 @@ func run(args []string) error {
 	var expectedVersion *int
 	var approve *bool
 	switch command {
+	case "state-snapshot":
 	case "import":
 		content = flags.String("content", "", "text or Markdown content")
 		kind = flags.String("kind", "text", "text or markdown")
@@ -108,6 +109,12 @@ func run(args []string) error {
 	switch command {
 	case "serve":
 		return transport.Serve(context.Background(), os.Stdin, os.Stdout, os.Stderr, transport.NewServer(core))
+	case "state-snapshot":
+		result, err := transport.NewServer(core).StateSnapshot(context.Background())
+		if err != nil {
+			return err
+		}
+		return writeResult(result, *jsonOutput)
 	case "health":
 		if *jsonOutput {
 			return json.NewEncoder(os.Stdout).Encode(core.Health())

@@ -11,6 +11,7 @@ cd "$root_dir"
 go build -o "$binary" ./cmd/knowledge-core
 
 "$binary" health --data-dir "$data_dir/state" --json | grep -q '"ready":true'
+"$binary" state-snapshot --data-dir "$data_dir/state" --json | grep -q '"pending_candidates"'
 first_import=$("$binary" import --data-dir "$data_dir/state" --kind text --content 'Go agent evidence' --idempotency-key verify-import --json)
 second_import=$("$binary" import --data-dir "$data_dir/state" --kind text --content 'Go agent evidence' --idempotency-key verify-import --json)
 printf '%s' "$first_import" | grep -q '"replayed":false'

@@ -143,6 +143,27 @@ func (store *Store) GetQueryRun(ctx context.Context, runID string) (domain.Query
 	return run, traces.Err()
 }
 
+func (store *Store) ListActiveQueryRuns(ctx context.Context) ([]domain.QueryRun, error) {
+	rows, err := store.db.QueryContext(ctx, `SELECT id, question, mode, knowledge_version, profile_version, state, created_at FROM query_runs WHERE state IN ('queued', 'running') ORDER BY created_at ASC`)
+	if err != nil {
+		return nil, fmt.Errorf("list active query runs: %w", err)
+	}
+	defer rows.Close()
+	runs := make([]domain.QueryRun, 0)
+	for rows.Next() {
+		var run domain.QueryRun
+		var createdAt string
+		if err := rows.Scan(&run.ID, &run.Question, &run.Mode, &run.KnowledgeVersion, &run.ProfileVersion, &run.State, &createdAt); err != nil {
+			return nil, fmt.Errorf("scan active query run: %w", err)
+		}
+		if run.CreatedAt, err = time.Parse(time.RFC3339Nano, createdAt); err != nil {
+			return nil, fmt.Errorf("parse active query creation time: %w", err)
+		}
+		runs = append(runs, run)
+	}
+	return runs, rows.Err()
+}
+
 type queryHit struct {
 	knowledgeID string
 	revisionID  string

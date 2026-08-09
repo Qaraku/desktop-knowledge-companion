@@ -67,6 +67,27 @@ func NewServer(core *store.Store) *Server {
 	return &Server{store: core, knowledge: app.NewKnowledgeService(core), query: app.NewQueryService(core), agent: agent.NewService(agent.DefaultRegistry(), core)}
 }
 
+func (server *Server) StateSnapshot(ctx context.Context) (map[string]any, error) {
+	pendingCandidates, err := server.knowledge.ListPendingCandidates(ctx)
+	if err != nil {
+		return nil, err
+	}
+	pendingPrompts, err := server.agent.ListPendingPrompts(ctx)
+	if err != nil {
+		return nil, err
+	}
+	activeRuns, err := server.store.ListActiveQueryRuns(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"health":             server.store.Health(),
+		"pending_candidates": pendingCandidates,
+		"pending_prompts":    pendingPrompts,
+		"active_runs":        activeRuns,
+	}, nil
+}
+
 func Serve(ctx context.Context, input io.Reader, output io.Writer, diagnostics io.Writer, server *Server) error {
 	scanner := bufio.NewScanner(input)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
@@ -154,7 +175,7 @@ func (server *Server) call(ctx context.Context, item request) (any, error) {
 	case "core.health":
 		return server.store.Health(), nil
 	case "core.state_snapshot":
-		return map[string]any{"health": server.store.Health()}, nil
+		return server.StateSnapshot(ctx)
 	case "import.create":
 		var p struct {
 			Kind        string `json:"kind"`

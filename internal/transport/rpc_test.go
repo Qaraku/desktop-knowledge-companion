@@ -120,6 +120,38 @@ func TestServerReplaysWriteResultAndRejectsIdempotencyConflict(t *testing.T) {
 	}
 }
 
+func TestStateSnapshotIncludesRecoverableWorkspaceState(t *testing.T) {
+	core, err := store.Open(context.Background(), t.TempDir())
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer core.Close()
+	server := NewServer(core)
+	imported, err := server.knowledge.Import(context.Background(), "text", "Pending", "", "rpc-snapshot-import")
+	if err != nil {
+		t.Fatalf("import: %v", err)
+	}
+	if _, err := server.agent.SuggestPrompt(context.Background(), "missing-evidence", "Import related material"); err != nil {
+		t.Fatalf("suggest prompt: %v", err)
+	}
+	if _, err := core.DB().Exec(`INSERT INTO query_runs(id, question, mode, knowledge_version, profile_version, state, created_at) VALUES ('run-active', 'pending', 'strict', 0, 'local_v1', 'running', '2026-08-09T00:00:00Z')`); err != nil {
+		t.Fatalf("create active run: %v", err)
+	}
+	snapshot, err := server.StateSnapshot(context.Background())
+	if err != nil {
+		t.Fatalf("state snapshot: %v", err)
+	}
+	if candidates := snapshot["pending_candidates"].([]domain.Candidate); len(candidates) != 1 || candidates[0].ID != imported.Candidates[0].ID {
+		t.Fatalf("snapshot candidates = %#v", candidates)
+	}
+	if prompts := snapshot["pending_prompts"].([]store.PendingItem); len(prompts) != 1 {
+		t.Fatalf("snapshot prompts = %#v", prompts)
+	}
+	if runs := snapshot["active_runs"].([]domain.QueryRun); len(runs) != 1 || runs[0].ID != "run-active" {
+		t.Fatalf("snapshot active runs = %#v", runs)
+	}
+}
+
 func TestServerDispatchesKnowledgeRevision(t *testing.T) {
 	core, err := store.Open(context.Background(), t.TempDir())
 	if err != nil {
