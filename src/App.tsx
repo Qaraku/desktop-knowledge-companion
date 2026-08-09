@@ -2,7 +2,7 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { supportedPlatforms } from "./projectScope";
 
-type Candidate = { id: string | number; content: string; state: "proposed" | "promoted" | "rejected" };
+type Candidate = { id: string | number; content: string; state: "proposed" | "promoted" | "rejected"; version: number };
 type Knowledge = { id: string | number; content: string };
 type KnowledgeListResponse = { result?: { value?: Array<{ knowledge: { id: string }; content: string }> } };
 
@@ -44,9 +44,9 @@ export function App() {
     const content = source.trim();
     if (!content) return;
     try {
-      const response = await invoke<{ result?: { value?: { candidates?: Array<{ id: string; content: string }> } } }>("desktop_import_text", { content, displayName: "GUI text" });
+      const response = await invoke<{ result?: { value?: { candidates?: Array<{ id: string; content: string; version: number }> } } }>("desktop_import_text", { content, displayName: "GUI text" });
       const imported = response.result?.value?.candidates ?? [];
-      setCandidates(imported.map((item) => ({ id: item.id, content: item.content, state: "proposed" })));
+      setCandidates(imported.map((item) => ({ id: item.id, content: item.content, state: "proposed", version: item.version })));
       setSource("");
     } catch {
       setCoreStatus("导入失败：核心不可用或拒绝了请求。");
@@ -68,8 +68,13 @@ export function App() {
     }
   }
 
-  function reject(id: string | number) {
-    setCandidates((items) => items.map((item) => (item.id === id ? { ...item, state: "rejected" } : item)));
+  async function reject(candidate: Candidate) {
+    try {
+      await invoke("desktop_reject_candidate", { candidateId: String(candidate.id), expectedVersion: candidate.version });
+      setCandidates((items) => items.map((item) => (item.id === candidate.id ? { ...item, state: "rejected", version: item.version + 1 } : item)));
+    } catch {
+      setCoreStatus("拒绝候选失败：候选已变更或核心请求被拒绝。");
+    }
   }
 
   function ask(event: FormEvent) {
@@ -102,7 +107,7 @@ export function App() {
         {activeCandidates.length === 0 ? <p>暂无待确认候选。</p> : activeCandidates.map((candidate) => (
           <article key={candidate.id} className="card">
             <textarea aria-label="候选内容" value={candidate.content} onChange={(event) => updateCandidate(candidate.id, event.target.value)} />
-            <p><button onClick={() => promote(candidate)}>确认入库</button> <button onClick={() => reject(candidate.id)}>拒绝</button></p>
+            <p><button onClick={() => promote(candidate)}>确认入库</button> <button onClick={() => reject(candidate)}>拒绝</button></p>
           </article>
         ))}
       </section>
