@@ -3,7 +3,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { supportedPlatforms } from "./projectScope";
 
 type Candidate = { id: number; content: string; state: "proposed" | "promoted" | "rejected" };
-type Knowledge = { id: number; content: string };
+type Knowledge = { id: string | number; content: string };
+type KnowledgeListResponse = { result?: { value?: Array<{ knowledge: { id: string }; content: string }> } };
 
 export function App() {
   const [source, setSource] = useState("");
@@ -22,6 +23,9 @@ export function App() {
 					return;
 				}
 				await invoke("desktop_core_start");
+				const response = await invoke<KnowledgeListResponse>("desktop_knowledge_list");
+				const entries = response.result?.value ?? [];
+				setKnowledge(entries.map((item) => ({ id: item.knowledge.id, content: item.content })));
 				setCoreStatus("Go 核心已由桌面 gateway 启动。");
 			} catch {
 				setCoreStatus("浏览器预览模式：未连接桌面 gateway。" );
