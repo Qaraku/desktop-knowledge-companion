@@ -43,6 +43,10 @@ jobs:
       - name: Bundle Debian package
         if: runner.os == 'Linux'
         run: npm run tauri -- build --bundles deb
+      - name: Verify Debian package contents
+        if: runner.os == 'Linux'
+        run: |
+          dpkg-deb -c src-tauri/target/release/bundle/deb/*.deb | grep 'usr/bin/knowledge-core'
       - name: Bundle Windows installer
         if: runner.os == 'Windows'
         run: npm run tauri -- build --bundles nsis
