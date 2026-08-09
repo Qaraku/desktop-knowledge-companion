@@ -10,3 +10,4 @@ __pycache__/
 build/
 pyinstaller-build/
 src-tauri/gen/
+src-tauri/binaries/knowledge-core*
