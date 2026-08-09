@@ -198,6 +198,73 @@ fn desktop_revise_knowledge(
         .map_err(str::to_owned)
 }
 
+#[tauri::command]
+fn desktop_agent_pending_list(
+    sidecar: tauri::State<'_, sidecar::SidecarLaunch>,
+    process: tauri::State<'_, sidecar::CoreProcess>,
+) -> Result<serde_json::Value, String> {
+    process
+        .request(&sidecar, "agent.pending.list", serde_json::json!({}))
+        .map_err(str::to_owned)
+}
+
+#[tauri::command]
+fn desktop_suggest_missing_evidence(
+    question: String,
+    sidecar: tauri::State<'_, sidecar::SidecarLaunch>,
+    process: tauri::State<'_, sidecar::CoreProcess>,
+) -> Result<serde_json::Value, String> {
+    if question.trim().is_empty() {
+        return Err("question is required".to_owned());
+    }
+    process
+        .request_with_idempotency(
+            &sidecar,
+            "agent.prompt.suggest",
+            serde_json::json!({"topic":"missing-evidence","detail":format!("问题「{question}」缺少本地证据；可导入相关资料。")}),
+            Some(&gateway_key("gui-missing-evidence")?),
+        )
+        .map_err(str::to_owned)
+}
+
+#[tauri::command]
+fn desktop_resolve_missing_evidence_prompt(
+    pending_id: String,
+    action: String,
+    sidecar: tauri::State<'_, sidecar::SidecarLaunch>,
+    process: tauri::State<'_, sidecar::CoreProcess>,
+) -> Result<serde_json::Value, String> {
+    let state = match action.as_str() {
+        "close" => "closed",
+        "ignore" => "ignored",
+        "defer" => "deferred",
+        _ => return Err("invalid prompt action".to_owned()),
+    };
+    if action == "ignore" || action == "defer" {
+        let preference = if action == "ignore" {
+            serde_json::json!({"topic":"missing-evidence","state":"ignored"})
+        } else {
+            serde_json::json!({"topic":"missing-evidence","state":"deferred","defer_for_seconds":86400})
+        };
+        process
+            .request_with_idempotency(
+                &sidecar,
+                "agent.prompt.preference.set",
+                preference,
+                Some(&gateway_key("gui-missing-evidence-preference")?),
+            )
+            .map_err(str::to_owned)?;
+    }
+    process
+        .request_with_idempotency(
+            &sidecar,
+            "agent.pending.resolve",
+            serde_json::json!({"id":pending_id,"state":state}),
+            Some(&gateway_key("gui-missing-evidence-resolve")?),
+        )
+        .map_err(str::to_owned)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -212,7 +279,10 @@ pub fn run() {
             desktop_reject_candidate,
             desktop_update_candidate,
             desktop_query,
-            desktop_revise_knowledge
+            desktop_revise_knowledge,
+            desktop_agent_pending_list,
+            desktop_suggest_missing_evidence,
+            desktop_resolve_missing_evidence_prompt
         ])
         .setup(|app| {
             let resolved = app.path().app_local_data_dir()?;
