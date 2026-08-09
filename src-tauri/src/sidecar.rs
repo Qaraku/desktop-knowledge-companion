@@ -1,0 +1,73 @@
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+#[derive(Debug)]
+pub(crate) struct SidecarLaunch {
+    executable: PathBuf,
+    #[allow(dead_code)]
+    data_dir: PathBuf,
+}
+
+impl SidecarLaunch {
+    pub(crate) fn new(resource_dir: PathBuf, data_dir: PathBuf) -> Result<Self, &'static str> {
+        if !resource_dir.is_absolute() || !data_dir.is_absolute() {
+            return Err("sidecar resource and data directories must be absolute");
+        }
+        let executable = resource_dir.join("binaries").join(sidecar_file_name());
+        Ok(Self {
+            executable,
+            data_dir,
+        })
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn command(&self) -> Command {
+        let mut command = Command::new(&self.executable);
+        command.arg("serve").arg("--data-dir").arg(&self.data_dir);
+        command
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn executable(&self) -> &Path {
+        &self.executable
+    }
+}
+
+fn sidecar_file_name() -> &'static str {
+    if cfg!(target_os = "windows") {
+        "knowledge-core.exe"
+    } else {
+        "knowledge-core"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SidecarLaunch;
+    use std::path::PathBuf;
+
+    #[test]
+    fn rejects_relative_paths() {
+        assert!(SidecarLaunch::new(PathBuf::from("resource"), PathBuf::from("data")).is_err());
+    }
+
+    #[test]
+    fn passes_only_fixed_serve_arguments() {
+        let resource = std::env::current_dir().unwrap();
+        let data = resource.join("data");
+        let launch = SidecarLaunch::new(resource, data.clone()).unwrap();
+        let command = launch.command();
+        let values: Vec<_> = command
+            .get_args()
+            .map(|value| value.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            values,
+            vec![
+                "serve".to_string(),
+                "--data-dir".to_string(),
+                data.display().to_string()
+            ]
+        );
+    }
+}
