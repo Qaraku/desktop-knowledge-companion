@@ -93,6 +93,12 @@ impl CoreProcess {
             Ok(response) => Ok(response),
             Err(_) => {
                 self.reset()?;
+                if idempotency_key.is_some() {
+                    self.start(launch)?;
+                    return Err(
+                        "core restarted after an interrupted write; refresh state before retrying",
+                    );
+                }
                 self.request_once(launch, &request)
             }
         }
@@ -212,6 +218,42 @@ mod tests {
         let launch = SidecarLaunch::new(root.clone(), root.join("data")).unwrap();
         let value = CoreProcess::default().health(&launch).unwrap();
         assert_eq!(value["result"]["value"]["ready"], true);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn does_not_replay_interrupted_write_requests() {
+        use std::fs;
+        use std::os::unix::fs::PermissionsExt;
+
+        let root =
+            std::env::temp_dir().join(format!("knowledge-sidecar-write-{}", std::process::id()));
+        let binaries = root.join("binaries");
+        fs::create_dir_all(&binaries).unwrap();
+        let executable = binaries.join("knowledge-core");
+        fs::write(
+            &executable,
+            "#!/bin/sh\nstate=\"$0.state\"\nread line\nprintf x >> \"$state\"\nexit 1\n",
+        )
+        .unwrap();
+        fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
+        let launch = SidecarLaunch::new(root.clone(), root.join("data")).unwrap();
+        let process = CoreProcess::default();
+        assert_eq!(
+            process.request_with_idempotency(
+                &launch,
+                "import.create",
+                serde_json::json!({}),
+                Some("write-key")
+            ),
+            Err("core restarted after an interrupted write; refresh state before retrying")
+        );
+        assert_eq!(
+            fs::read_to_string(format!("{}.state", executable.display())).unwrap(),
+            "x"
+        );
+        process.reset().unwrap();
         fs::remove_dir_all(root).unwrap();
     }
 }
