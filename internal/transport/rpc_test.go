@@ -127,6 +127,57 @@ func TestServerReplaysWriteResultAndRejectsIdempotencyConflict(t *testing.T) {
 	}
 }
 
+func TestServerSplitsAndMergesCandidates(t *testing.T) {
+	core, err := store.Open(context.Background(), t.TempDir())
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer core.Close()
+	server := NewServer(core)
+	imported, err := server.knowledge.Import(context.Background(), "text", "Original", "", "rpc-transform-import")
+	if err != nil {
+		t.Fatalf("import: %v", err)
+	}
+	split := server.dispatch(context.Background(), request{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage("1"),
+		Method:  "candidate.split",
+		Params:  json.RawMessage(`{"id":"` + imported.Candidates[0].ID + `","expected_version":1,"parts":["First","Second"]}`),
+		Meta:    meta{ProtocolVersion: 1, RequestID: "0198c787-8bf0-7afe-8c7d-9a41c6671c23", Caller: "test", IdempotencyKey: "rpc-candidate-split-1"},
+	})
+	if split.Error != nil {
+		t.Fatalf("split candidate: %#v", split.Error)
+	}
+	parts := split.Result.(struct {
+		RequestID string `json:"request_id"`
+		Value     any    `json:"value"`
+	}).Value.([]domain.Candidate)
+	if len(parts) != 2 || parts[0].Version != 2 || parts[1].Version != 1 {
+		t.Fatalf("split parts: %#v", parts)
+	}
+	merged := server.dispatch(context.Background(), request{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage("2"),
+		Method:  "candidate.merge",
+		Params:  json.RawMessage(`{"candidates":[{"id":"` + parts[1].ID + `","expected_version":1},{"id":"` + parts[0].ID + `","expected_version":2}]}`),
+		Meta:    meta{ProtocolVersion: 1, RequestID: "0198c787-8bf0-7afe-8c7d-9a41c6671c24", Caller: "test", IdempotencyKey: "rpc-candidate-merge-1"},
+	})
+	if merged.Error != nil {
+		t.Fatalf("merge candidate: %#v", merged.Error)
+	}
+	value := merged.Result.(struct {
+		RequestID string `json:"request_id"`
+		Value     any    `json:"value"`
+	}).Value.(domain.Candidate)
+	if value.ID != parts[0].ID || value.Content != "First\n\nSecond" || value.Version != 3 {
+		t.Fatalf("merged candidate: %#v", value)
+	}
+	other, err := core.GetCandidate(context.Background(), parts[1].ID)
+	if err != nil || other.State != domain.CandidateSuperseded {
+		t.Fatalf("superseded candidate: %#v, %v", other, err)
+	}
+}
+
 func TestStateSnapshotIncludesRecoverableWorkspaceState(t *testing.T) {
 	core, err := store.Open(context.Background(), t.TempDir())
 	if err != nil {

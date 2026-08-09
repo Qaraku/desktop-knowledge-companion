@@ -11,6 +11,7 @@ import (
 
 	"desktop-knowledge-companion/internal/agent"
 	"desktop-knowledge-companion/internal/app"
+	"desktop-knowledge-companion/internal/domain"
 	"desktop-knowledge-companion/internal/store"
 	"desktop-knowledge-companion/internal/transport"
 )
@@ -24,14 +25,14 @@ func main() {
 
 func run(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: knowledge-core <serve|health|state-snapshot|import|candidate-list|candidate-get|candidate-pending|candidate-update|candidate-reject|candidate-approval|approval-resolve|candidate-promote|knowledge|knowledge-get|knowledge-source|knowledge-revise|knowledge-link-conflict|agent-tool-inspect|agent-tool-request-approval|agent-tool-consume-approval|agent-prompt-suggest|agent-prompt-preference-set|agent-pending-list|agent-pending-resolve|query|query-cancel|run> --data-dir <absolute-path> [--json]")
+		return errors.New("usage: knowledge-core <serve|health|state-snapshot|import|candidate-list|candidate-get|candidate-pending|candidate-update|candidate-reject|candidate-split|candidate-merge|candidate-approval|approval-resolve|candidate-promote|knowledge|knowledge-get|knowledge-source|knowledge-revise|knowledge-link-conflict|agent-tool-inspect|agent-tool-request-approval|agent-tool-consume-approval|agent-prompt-suggest|agent-prompt-preference-set|agent-pending-list|agent-pending-resolve|query|query-cancel|run> --data-dir <absolute-path> [--json]")
 	}
 	command := args[0]
 	flags := flag.NewFlagSet(command, flag.ContinueOnError)
 	flags.SetOutput(os.Stderr)
 	dataDir := flags.String("data-dir", "", "absolute knowledge data directory")
 	jsonOutput := flags.Bool("json", false, "write a JSON result")
-	var content, kind, displayName, idempotencyKey, question, mode, profile, runID, ingestionID, candidateID, approvalID, token, caller, knowledgeID, expectedRevisionID, reason, toolName, parameters, topic, detail, preferenceState, deferredUntil, fromKnowledgeID, toKnowledgeID *string
+	var content, kind, displayName, idempotencyKey, question, mode, profile, runID, ingestionID, candidateID, approvalID, token, caller, knowledgeID, expectedRevisionID, reason, toolName, parameters, topic, detail, preferenceState, deferredUntil, fromKnowledgeID, toKnowledgeID, partsJSON, candidatesJSON *string
 	var expectedVersion *int
 	var approve *bool
 	switch command {
@@ -61,6 +62,12 @@ func run(args []string) error {
 	case "candidate-reject":
 		candidateID = flags.String("candidate-id", "", "candidate identifier")
 		expectedVersion = flags.Int("expected-version", 0, "candidate version to reject")
+	case "candidate-split":
+		candidateID = flags.String("candidate-id", "", "candidate identifier")
+		expectedVersion = flags.Int("expected-version", 0, "candidate version to split")
+		partsJSON = flags.String("parts-json", "[]", "JSON array of split candidate content")
+	case "candidate-merge":
+		candidatesJSON = flags.String("candidates-json", "[]", "JSON array of candidate id and expected version")
 	case "candidate-approval":
 		candidateID = flags.String("candidate-id", "", "candidate identifier")
 		caller = flags.String("caller", "cli", "approval caller")
@@ -171,6 +178,26 @@ func run(args []string) error {
 		return writeResult(result, *jsonOutput)
 	case "candidate-reject":
 		result, err := app.NewKnowledgeService(core).RejectCandidate(context.Background(), *candidateID, *expectedVersion)
+		if err != nil {
+			return err
+		}
+		return writeResult(result, *jsonOutput)
+	case "candidate-split":
+		var parts []string
+		if err := json.Unmarshal([]byte(*partsJSON), &parts); err != nil {
+			return fmt.Errorf("parse parts-json: %w", err)
+		}
+		result, err := app.NewKnowledgeService(core).SplitCandidate(context.Background(), *candidateID, *expectedVersion, parts)
+		if err != nil {
+			return err
+		}
+		return writeResult(result, *jsonOutput)
+	case "candidate-merge":
+		var candidates []domain.CandidateVersion
+		if err := json.Unmarshal([]byte(*candidatesJSON), &candidates); err != nil {
+			return fmt.Errorf("parse candidates-json: %w", err)
+		}
+		result, err := app.NewKnowledgeService(core).MergeCandidates(context.Background(), candidates)
 		if err != nil {
 			return err
 		}

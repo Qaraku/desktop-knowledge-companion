@@ -47,6 +47,19 @@ Alpha
 Beta' --idempotency-key verify-markdown --json)
 printf '%s' "$markdown_import" | grep -Fq '"title_path":["First"]'
 printf '%s' "$markdown_import" | grep -Fq '"title_path":["Second"]'
+transform_import=$("$binary" import --data-dir "$data_dir/state" --kind text --content 'Transform source' --idempotency-key verify-transform --json)
+transform_id=$(printf '%s' "$transform_import" | sed -n 's/.*"candidates":\[{"id":"\([^"]*\)".*/\1/p')
+split=$(
+  "$binary" candidate-split --data-dir "$data_dir/state" --candidate-id "$transform_id" --expected-version 1 --parts-json '["Transform first", "Transform second"]' --json
+)
+split_ids=$(printf '%s' "$split" | sed 's/},{/\n/g' | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+split_first=$(printf '%s\n' "$split_ids" | sed -n '1p')
+split_second=$(printf '%s\n' "$split_ids" | sed -n '2p')
+merged=$(
+  "$binary" candidate-merge --data-dir "$data_dir/state" --candidates-json "[{\"id\":\"$split_second\",\"expected_version\":1},{\"id\":\"$split_first\",\"expected_version\":2}]" --json
+)
+printf '%s' "$merged" | grep -q 'Transform first'
+"$binary" candidate-get --data-dir "$data_dir/state" --candidate-id "$split_second" --json | grep -q '"state":"superseded"'
 "$binary" agent-tool-inspect --data-dir "$data_dir/state" --tool-name network.search --json | grep -q '"allowed":false'
 agent_approval=$("$binary" agent-tool-request-approval --data-dir "$data_dir/state" --tool-name candidate.promote --parameters '{"candidate_id":"agent-check"}' --json)
 agent_approval_id=$(printf '%s' "$agent_approval" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')

@@ -14,6 +14,7 @@ import (
 
 	"desktop-knowledge-companion/internal/agent"
 	"desktop-knowledge-companion/internal/app"
+	"desktop-knowledge-companion/internal/domain"
 	"desktop-knowledge-companion/internal/store"
 )
 
@@ -223,6 +224,24 @@ func (server *Server) call(ctx context.Context, item request) (any, error) {
 			return nil, err
 		}
 		return server.knowledge.RejectCandidate(ctx, p.ID, p.ExpectedVersion)
+	case "candidate.split":
+		var p struct {
+			ID              string   `json:"id"`
+			ExpectedVersion int      `json:"expected_version"`
+			Parts           []string `json:"parts"`
+		}
+		if err := json.Unmarshal(item.Params, &p); err != nil {
+			return nil, err
+		}
+		return server.knowledge.SplitCandidate(ctx, p.ID, p.ExpectedVersion, p.Parts)
+	case "candidate.merge":
+		var p struct {
+			Candidates []domain.CandidateVersion `json:"candidates"`
+		}
+		if err := json.Unmarshal(item.Params, &p); err != nil {
+			return nil, err
+		}
+		return server.knowledge.MergeCandidates(ctx, p.Candidates)
 	case "candidate.request_approval":
 		var p struct {
 			CandidateID string `json:"candidate_id"`
@@ -410,7 +429,7 @@ var errMethodNotFound = errors.New("method not found")
 
 func writeMethod(method string) bool {
 	switch method {
-	case "import.create", "candidate.update", "candidate.reject", "candidate.request_approval", "approval.resolve", "candidate.approve", "knowledge.revise", "knowledge.link_conflict", "agent.tool.request_approval", "agent.tool.consume_approval", "agent.prompt.suggest", "agent.prompt.preference.set", "agent.pending.resolve", "query.start", "query.cancel":
+	case "import.create", "candidate.update", "candidate.reject", "candidate.split", "candidate.merge", "candidate.request_approval", "approval.resolve", "candidate.approve", "knowledge.revise", "knowledge.link_conflict", "agent.tool.request_approval", "agent.tool.consume_approval", "agent.prompt.suggest", "agent.prompt.preference.set", "agent.pending.resolve", "query.start", "query.cancel":
 		return true
 	}
 	return false
