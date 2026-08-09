@@ -126,6 +126,27 @@ fn desktop_reject_candidate(
         .map_err(str::to_owned)
 }
 
+#[tauri::command]
+fn desktop_update_candidate(
+    candidate_id: String,
+    expected_version: i64,
+    content: String,
+    sidecar: tauri::State<'_, sidecar::SidecarLaunch>,
+    process: tauri::State<'_, sidecar::CoreProcess>,
+) -> Result<serde_json::Value, String> {
+    if content.trim().is_empty() {
+        return Err("candidate content is required".to_owned());
+    }
+    process
+        .request_with_idempotency(
+            &sidecar,
+            "candidate.update",
+            serde_json::json!({"id":candidate_id,"expected_version":expected_version,"content":content}),
+            Some(&gateway_key("gui-candidate-update")?),
+        )
+        .map_err(str::to_owned)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -136,7 +157,8 @@ pub fn run() {
             desktop_knowledge_list,
             desktop_import_text,
             desktop_promote_candidate,
-            desktop_reject_candidate
+            desktop_reject_candidate,
+            desktop_update_candidate
         ])
         .setup(|app| {
             let resolved = app.path().app_local_data_dir()?;
