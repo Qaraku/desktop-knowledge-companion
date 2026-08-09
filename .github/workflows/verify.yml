@@ -40,24 +40,42 @@ jobs:
       - run: npm run build
       - run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
       - run: cargo test --manifest-path src-tauri/Cargo.toml -q
-      - name: Bundle Debian package
+      - name: Bundle Linux packages
         if: runner.os == 'Linux'
-        run: npm run tauri -- build --bundles deb
+        run: NO_STRIP=1 npm run tauri -- build --bundles deb,appimage
       - name: Verify Debian package contents
         if: runner.os == 'Linux'
         run: |
           dpkg-deb -c src-tauri/target/release/bundle/deb/*.deb | grep 'usr/bin/knowledge-core'
           package_root=$(mktemp -d)
+          trap 'rm -r -- "$package_root"' EXIT
           dpkg-deb -x src-tauri/target/release/bundle/deb/*.deb "$package_root"
+          test -f "$package_root/usr/lib/Desktop Knowledge Companion/sidecar-manifest.json"
           "$package_root/usr/bin/knowledge-core" health --data-dir "$package_root/data" --json | grep '"ready":true'
+          "$package_root/usr/bin/knowledge-core" health --data-dir "$package_root/data" --json | grep '"schema_version":6'
+      - name: Verify AppImage contents
+        if: runner.os == 'Linux'
+        run: |
+          package_root=$(mktemp -d)
+          trap 'rm -r -- "$package_root"' EXIT
+          (
+            cd "$package_root"
+            "$GITHUB_WORKSPACE"/src-tauri/target/release/bundle/appimage/*.AppImage --appimage-extract >/dev/null
+          )
+          test -x "$package_root/squashfs-root/usr/bin/knowledge-core"
+          test -f "$package_root/squashfs-root/usr/lib/Desktop Knowledge Companion/sidecar-manifest.json"
+          "$package_root/squashfs-root/usr/bin/knowledge-core" health --data-dir "$package_root/data" --json | grep '"ready":true'
+          "$package_root/squashfs-root/usr/bin/knowledge-core" health --data-dir "$package_root/data" --json | grep '"schema_version":6'
       - name: Bundle Windows installer
         if: runner.os == 'Windows'
         run: npm run tauri -- build --bundles nsis
       - uses: actions/upload-artifact@v4
         if: runner.os == 'Linux'
         with:
-          name: desktop-debian-package
-          path: src-tauri/target/release/bundle/deb/*.deb
+          name: desktop-linux-packages
+          path: |
+            src-tauri/target/release/bundle/deb/*.deb
+            src-tauri/target/release/bundle/appimage/*.AppImage
       - uses: actions/upload-artifact@v4
         if: runner.os == 'Windows'
         with:
