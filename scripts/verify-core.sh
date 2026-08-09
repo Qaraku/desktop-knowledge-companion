@@ -15,6 +15,13 @@ first_import=$("$binary" import --data-dir "$data_dir/state" --kind text --conte
 second_import=$("$binary" import --data-dir "$data_dir/state" --kind text --content 'Go agent evidence' --idempotency-key verify-import --json)
 printf '%s' "$first_import" | grep -q '"replayed":false'
 printf '%s' "$second_import" | grep -q '"replayed":true'
+candidate_id=$(printf '%s' "$first_import" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+approval=$("$binary" candidate-approval --data-dir "$data_dir/state" --candidate-id "$candidate_id" --json)
+approval_id=$(printf '%s' "$approval" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+resolved=$("$binary" approval-resolve --data-dir "$data_dir/state" --approval-id "$approval_id" --approve --json)
+token=$(printf '%s' "$resolved" | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
+"$binary" candidate-promote --data-dir "$data_dir/state" --candidate-id "$candidate_id" --token "$token" --json | grep -q '"knowledge"'
+"$binary" knowledge --data-dir "$data_dir/state" --json | grep -q 'Go agent evidence'
 query_result=$("$binary" query --data-dir "$data_dir/state" --question 'unmatched query' --mode strict --json)
 printf '%s' "$query_result" | grep -q '"refusal_reason":"no_local_evidence"'
 run_id=$(printf '%s' "$query_result" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
