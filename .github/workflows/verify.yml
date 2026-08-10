@@ -123,7 +123,9 @@ jobs:
             test -x /usr/bin/desktop_knowledge_companion
             test -x /usr/bin/knowledge-core
             test -f "/usr/lib/Desktop Knowledge Companion/sidecar-manifest.json"
-            knowledge-core health --data-dir /tmp/desktop-knowledge-companion-ci --json | grep '"ready":true,"schema_version":7'
+            health=$(knowledge-core health --data-dir /tmp/desktop-knowledge-companion-ci --json)
+            printf '%s\n' "$health" | grep '"ready":true'
+            printf '%s\n' "$health" | grep '"schema_version":7'
             ! ldd /usr/bin/desktop_knowledge_companion | grep -q 'not found'
             ! ldd /usr/bin/knowledge-core | grep -q 'not found'
           ) 2>&1 | tee artifacts/debian-package-smoke.log
@@ -179,7 +181,8 @@ jobs:
           $dataDirectory = Join-Path $env:RUNNER_TEMP 'desktop-knowledge-companion-ci'
           $health = & $core health --data-dir $dataDirectory --json
           if ($LASTEXITCODE -ne 0) { throw "sidecar health failed with exit code $LASTEXITCODE" }
-          if ($health -notmatch '"ready":true,"schema_version":7') { throw "unexpected sidecar health: $health" }
+          $healthValue = $health | ConvertFrom-Json
+          if (!$healthValue.ready -or $healthValue.schema_version -ne 7) { throw "unexpected sidecar health: $health" }
       - name: Record Windows installer checksum
         if: runner.os == 'Windows'
         shell: pwsh
