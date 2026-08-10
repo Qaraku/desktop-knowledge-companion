@@ -38,8 +38,19 @@ jobs:
             libssl-dev \
             libayatana-appindicator3-dev \
             librsvg2-dev
-      - run: go test -v ./...
+      - name: Test Go core
         shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p artifacts
+          go test -v ./... 2>&1 | tee artifacts/go-test.log
+      - name: Upload Go test log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: go-test-${{ runner.os }}
+          path: artifacts/go-test.log
+          if-no-files-found: warn
       - run: sh scripts/verify-core.sh
         shell: bash
       - name: Build Go sidecar
