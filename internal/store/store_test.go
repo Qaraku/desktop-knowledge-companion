@@ -26,7 +26,11 @@ func TestOpenCreatesManagedDirectoriesAndSQLiteFeatures(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = core.Close() })
 
-	if health := core.Health(); !health.Ready || health.SchemaVersion != 7 || health.DataDir != root {
+	expectedRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatalf("resolve expected data directory: %v", err)
+	}
+	if health := core.Health(); !health.Ready || health.SchemaVersion != 7 || health.DataDir != expectedRoot {
 		t.Fatalf("unexpected health: %#v", health)
 	}
 	for _, name := range []string{"knowledge.db", "backups", "cache", "core.lock"} {
