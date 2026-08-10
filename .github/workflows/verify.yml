@@ -23,6 +23,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.85.0
+          components: rustfmt
       - run: go test ./...
       - run: sh scripts/verify-core.sh
         shell: bash
