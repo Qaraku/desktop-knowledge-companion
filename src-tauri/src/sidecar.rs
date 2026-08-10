@@ -221,7 +221,9 @@ fn sidecar_target() -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::{CoreProcess, SidecarLaunch};
+    #[cfg(unix)]
+    use super::CoreProcess;
+    use super::SidecarLaunch;
     use std::path::PathBuf;
 
     #[cfg(unix)]
@@ -271,7 +273,7 @@ mod tests {
         assert!(SidecarLaunch::new(root.clone(), root.join("bin"), root.join("data")).is_err());
         std::fs::write(
             root.join("sidecar-manifest.json"),
-            r#"{"core_version":"0.1.0","protocol_version":1,"schema_version":7,"targets":["windows-x64"]}"#,
+            r#"{"core_version":"0.1.0","protocol_version":1,"schema_version":7,"targets":["unsupported"]}"#,
         )
         .unwrap();
         assert!(SidecarLaunch::new(root.clone(), root.join("bin"), root.join("data")).is_err());
